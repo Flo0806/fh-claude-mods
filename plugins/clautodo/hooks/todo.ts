@@ -12,6 +12,15 @@ export const parse = (text: string): Item[] =>
     return match && status ? [{ title: match[2]!.trim(), status }] : []
   })
 
+// An unindented line that starts like an item but is not one.
+const BROKEN = /^[-*+]\s*\[/
+
+export const problems = (text: string): string[] =>
+  text.split('\n').flatMap((line, index) => {
+    const isBroken = BROKEN.test(line) && !ITEM.test(line.trimEnd())
+    return isBroken ? [`line ${index + 1}: \`${line.trim()}\``] : []
+  })
+
 export const summarize = (items: Item[]): Summary | null => {
   if (items.length === 0) return null
   return {

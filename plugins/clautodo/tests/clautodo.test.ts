@@ -1,7 +1,7 @@
 import type { FsEntry, On } from 'claude-code'
 import { expect, mock, test, type Engine } from 'claude-code/testing'
 
-import { label, parse, summarize } from '../hooks/todo'
+import { label, parse, problems, summarize } from '../hooks/todo'
 
 const ROOT = '/project'
 
@@ -93,4 +93,55 @@ test('leaves the hint line alone without a .todo folder', async ($, on) => {
   const hint = await $.ui.mount(HINT)
 
   expect(await hint.find({ text: /[☐☑]/ })).toBeUndefined()
+})
+
+test('names each line that looks like an item but is not one', async () => {
+  expect(problems(LIST)).toEqual([])
+  expect(
+    problems('- [x] Done\n- [*] Odd mark\n-[ ] No space\n  - [?] indented is a summary'),
+  ).toEqual(['line 2: `- [*] Odd mark`', 'line 3: `-[ ] No space`'])
+})
+
+test('adds its rules last to the system prompt', async ($, on) => {
+  on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'Hi', scope: 'shared' }] }))
+
+  const { sections } = await $.prompt.compose({
+    model: 'claude-opus-5-5',
+    promptModel: 'claude-opus-5-5',
+    surfaces: ['terminal'],
+    tools: [],
+    outputStyle: null,
+    traits: [],
+  })
+
+  expect(sections.map((section) => section.id)).toEqual(['intro', 'clautodo:rules'])
+  expect(sections[1]?.text).toContain('.todo/<project>.md')
+})
+
+test('refuses the built-in todo tools in the main conversation', async ($, on) => {
+  on('tool.call', () => ({ result: 'ran' as never }))
+
+  const todo = await $.tool.call({ tool: 'TodoWrite', todos: [] })
+  const task = await $.tool.call({ tool: 'TaskCreate', subject: 'x', description: 'y' })
+  const stop = await $.tool.call({ tool: 'TaskStop', task_id: '1' })
+
+  expect(todo.deny).toContain('built-in todo list is disabled')
+  expect(task.deny).toContain('built-in todo list is disabled')
+  expect(stop.deny).toBeUndefined()
+})
+
+test('tells the model about broken lines after it edited a todo file', async ($, on) => {
+  const files = { 'nuxt.md': { text: '- [x] Done\n- [*] Odd mark', mtimeMs: 1 } }
+  engine(on, files)
+  on('tool.call', () => ({ result: 'edited' as never }))
+  const edit = { old_string: 'a', new_string: 'b' }
+
+  const broken = await $.tool.call({ tool: 'Edit', file_path: `${ROOT}/.todo/nuxt.md`, ...edit })
+  const other = await $.tool.call({ tool: 'Edit', file_path: `${ROOT}/notes.md`, ...edit })
+  files['nuxt.md'].text = LIST
+  const fixed = await $.tool.call({ tool: 'Edit', file_path: `${ROOT}/.todo/nuxt.md`, ...edit })
+
+  expect(broken.context?.join('\n')).toContain('line 2: `- [*] Odd mark`')
+  expect(other.context).toBeUndefined()
+  expect(fixed.context).toBeUndefined()
 })
