@@ -1,5 +1,5 @@
 import type { On, SessionMeasureInput } from 'claude-code'
-import { expect, mock, test } from 'claude-code/testing'
+import { expect, mock, test, type Plugin } from 'claude-code/testing'
 
 const NOW = Date.parse('2026-10-09T11:00:00+02:00')
 
@@ -24,6 +24,8 @@ const engine = (on: On) => {
     value: { startedAt: NOW, context: { window: 200_000 }, rateLimits: [] },
   }))
   on('session.measure', (_$, e) => ({ changed: e.changed }))
+  // An empty band, as the engine draws when no plugin shows anything.
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => $.ui.resolve(e).Box({}))
 }
 
 const measure = (e: Partial<SessionMeasureInput>): SessionMeasureInput => ({
@@ -64,3 +66,29 @@ test('shows only a context placeholder off a subscription, before the first resp
   expect(await band.find({ text: '7d' })).toBeUndefined()
   expect(await band.find({ text: '▱▱▱▱▱▱▱▱ –' })).toBeDefined()
 })
+
+// Loads further in than clausage and draws its band without calling next().
+const other = {
+  name: 'other-band',
+  tier: 'append',
+  register(on) {
+    on('ui.render', { component: 'AbovePrompt' }, ($, e) =>
+      $.ui.resolve(e).Text({ children: 'other band' }),
+    )
+  },
+} satisfies Plugin
+
+test(
+  'keeps the bands of plugins further in, drawing below them',
+  { plugins: [other] },
+  async ($, on) => {
+    engine(on)
+    await $.session.measure(measure({ context: { window: 200_000, percent: 6 } }))
+
+    const band = await $.ui.mount(BAND)
+    const texts = (await band.findAll({ type: 'Text' })).map((t) => t.text)
+
+    expect(texts).toContain('other band')
+    expect(texts.indexOf('other band')).toBeLessThan(texts.indexOf('ctx'))
+  },
+)

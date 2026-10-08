@@ -80,11 +80,17 @@ export const register: Register = (on) => {
       </Box>
     )
 
+    // Stack below other plugins' bands instead of replacing them, so ours sits next to the prompt.
+    const beneath = await next(e)
+
     return (
-      <Box gap={2}>
-        {current.fiveHour && segment('5h', current.fiveHour)}
-        {current.sevenDay && segment('7d', current.sevenDay)}
-        {segment('ctx', current.context)}
+      <Box flexDirection="column">
+        {beneath}
+        <Box gap={2}>
+          {current.fiveHour && segment('5h', current.fiveHour)}
+          {current.sevenDay && segment('7d', current.sevenDay)}
+          {segment('ctx', current.context)}
+        </Box>
       </Box>
     )
   })
