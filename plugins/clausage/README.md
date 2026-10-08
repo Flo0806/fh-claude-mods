@@ -23,5 +23,5 @@ Colors follow your theme: green below 50 %, yellow from 50 %, red from 80 %.
 ## Install
 
 ```
-/plugin install clausage --marketplace <github-user>/fh-claude-mods
+/plugin install clausage --marketplace Flo0806/fh-claude-mods
 ```

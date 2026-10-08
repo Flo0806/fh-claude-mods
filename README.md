@@ -13,7 +13,7 @@ A Claude Code plugin marketplace with small mods that change Claude Code's own i
 In a Claude Code session:
 
 ```
-/plugin install clausage --marketplace <github-user>/fh-claude-mods
+/plugin install clausage --marketplace Flo0806/fh-claude-mods
 ```
 
 Answer `y` to add the marketplace, then pick a scope.
