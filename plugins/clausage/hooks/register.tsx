@@ -28,9 +28,19 @@ const meter = (percent: number) => {
   return '▰'.repeat(filled) + '▱'.repeat(WIDTH - filled)
 }
 
-// A missing bar draws as an empty placeholder, so the band keeps its shape.
-const segment = (label: string, bar?: Bar) =>
-  bar ? `${label} ${meter(bar.percent)} ${Math.round(bar.percent)}%` : `${label} ${meter(0)} –`
+const DAY_MS = 24 * 60 * 60 * 1000
+
+const pad = (n: number) => String(n).padStart(2, '0')
+
+// Within a day the clock time is precise enough, further out the weekday is.
+const resetLabel = (iso: string, now: number) => {
+  const at = new Date(iso)
+  return at.getTime() - now < DAY_MS
+    ? `${pad(at.getHours())}:${pad(at.getMinutes())}`
+    : at.toLocaleDateString(undefined, { weekday: 'short' })
+}
+
+const tone = (percent: number) => (percent >= 80 ? 'error' : percent >= 50 ? 'warning' : 'success')
 
 export const register: Register = (on) => {
   // Seed right away, so the band shows after a start or reload without waiting for a turn.
@@ -52,15 +62,30 @@ export const register: Register = (on) => {
       return next(e)
     }
 
-    const line = [
-      current.fiveHour && segment('5h', current.fiveHour),
-      current.sevenDay && segment('7d', current.sevenDay),
-      segment('ctx', current.context),
-    ]
-      .filter(Boolean)
-      .join(' · ')
+    const { Box, Text } = $.ui.resolve(e)
+    const now = await $.clock.now()
 
-    const { Text } = $.ui.resolve(e)
-    return <Text dimColor>{line}</Text>
+    // A missing bar draws as an empty placeholder, so the band keeps its shape.
+    const segment = (label: string, bar?: Bar) => (
+      <Box gap={1}>
+        <Text dimColor>{label}</Text>
+        {bar ? (
+          <Text color={tone(bar.percent)}>
+            {meter(bar.percent)} {Math.round(bar.percent)}%
+          </Text>
+        ) : (
+          <Text dimColor>{meter(0)} –</Text>
+        )}
+        {bar?.resetsAt && <Text dimColor>↻{resetLabel(bar.resetsAt, now)}</Text>}
+      </Box>
+    )
+
+    return (
+      <Box gap={2}>
+        {current.fiveHour && segment('5h', current.fiveHour)}
+        {current.sevenDay && segment('7d', current.sevenDay)}
+        {segment('ctx', current.context)}
+      </Box>
+    )
   })
 }
