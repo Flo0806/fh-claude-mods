@@ -1,0 +1,11 @@
+{
+  "name": "fh-claude-mods",
+  "owner": { "name": "Florian Heuberger" },
+  "plugins": [
+    {
+      "name": "clausage",
+      "source": "./plugins/clausage",
+      "description": "Kompakte Usage-Anzeige: 5h-Limit, 7-Tage-Limit und Context als farbige Progressbars"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "name": "clausage",
+  "version": "0.1.0",
+  "description": "Usage & context progress bars above the prompt: 5-hour limit, 7-day limit, context window",
+  "keywords": ["usage", "rate-limit", "context", "progress", "statusbar", "tokens"]
+}

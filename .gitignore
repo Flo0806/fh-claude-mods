@@ -1,0 +1,9 @@
+# Internal scripts and tools
+/scripts
+
+# Local session things
+.remember/
+
+# Types Claude generates
+plugins/*/.claude-plugin/types/
+node_modules/
