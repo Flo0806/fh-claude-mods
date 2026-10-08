@@ -1,0 +1,14 @@
+{
+  "name": "fh-claude-mods",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "oxlint",
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check"
+  },
+  "devDependencies": {
+    "oxfmt": "^0.72.0",
+    "oxlint": "^1.87.0"
+  }
+}

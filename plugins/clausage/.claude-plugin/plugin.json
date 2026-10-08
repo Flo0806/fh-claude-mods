@@ -2,5 +2,7 @@
   "name": "clausage",
   "version": "0.1.0",
   "description": "Usage & context progress bars above the prompt: 5-hour limit, 7-day limit, context window",
-  "keywords": ["usage", "rate-limit", "context", "progress", "statusbar", "tokens"]
+  "author": { "name": "Florian Heuberger" },
+  "keywords": ["usage", "rate-limit", "context", "progress", "statusbar", "tokens"],
+  "types": "./types/index.d.ts"
 }
