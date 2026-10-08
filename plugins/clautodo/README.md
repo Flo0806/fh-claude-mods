@@ -25,6 +25,19 @@ A project todo list in `.todo/*.md`, its progress shown at the end of the dim hi
 
 Only unindented items count; indented lines belong to the item above.
 
+## The list
+
+`/todo` opens the list in a pane:
+
+| Key            | Does                                                   |
+| -------------- | ------------------------------------------------------ |
+| `1-9`, `Enter` | select an item and show its summary, again to deselect |
+| `x`            | check the selected item off, or reopen it              |
+| `s`            | mark the selected item as running                      |
+| `Esc`          | close                                                  |
+
+A change is written straight into the file, after reading it again, so an edit made meanwhile is kept.
+
 ## For Claude
 
 - A short section in the system prompt tells Claude the format and to propose a list in chat first, writing it only once you agreed.

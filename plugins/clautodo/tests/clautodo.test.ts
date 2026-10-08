@@ -1,7 +1,7 @@
 import type { FsEntry, On } from 'claude-code'
-import { expect, mock, test, type Engine } from 'claude-code/testing'
+import { expect, mock, test, type Engine, type Mounted } from 'claude-code/testing'
 
-import { label, parse, problems, summarize } from '../hooks/todo'
+import { label, parse, problems, setStatus, summarize } from '../hooks/todo'
 
 const ROOT = '/project'
 
@@ -38,19 +38,59 @@ const engine = (on: On, files: Record<string, { text: string; mtimeMs: number }>
     value: Object.entries(files).map(([name, { mtimeMs }]) => file(name, mtimeMs)),
   }))
   on('fs.read', (_$, e) => ({ value: files[e.path.split('/').pop() ?? '']?.text ?? '' }))
+  on('fs.write', (_$, e) => {
+    files[e.path.split('/').pop() ?? ''] = { text: e.text, mtimeMs: clock.now() + 1 }
+    return { value: undefined }
+  })
+  on('command.register', (_$, e) => ({ value: { command: e.name } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.render', { component: 'PromptHint' }, ($, e) =>
     $.ui.resolve(e).Text({ children: e.props.tail ?? '' }),
   )
   return clock
 }
 
+const PANE = {
+  plugin: 'clautodo',
+  surface: 'terminal',
+  component: 'Pane',
+  requestId: 'clautodo',
+  props: {
+    title: 'Todo',
+    isFocused: true,
+    bodyColumns: 80,
+    placement: 'inline',
+    scroll: { offset: 0, bodyRows: 30 },
+    view: {},
+  },
+} as const
+
+// The rows drawn in the accent color, which marks the selected item.
+const selectedTitles = async (pane: Mounted<'terminal', 'Pane'>) =>
+  (await pane.findAll({ type: 'Text' }))
+    .filter((text) => text.props.color === 'claude')
+    .map((text) => text.text)
+
 const start = ($: Engine) =>
   $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
 
-test('parses top level items and ignores indented summary lines', async () => {
-  expect(parse(LIST).map((item) => item.status)).toEqual(['done', 'running', 'open'])
-  expect(summarize(parse(LIST))).toEqual({ done: 1, total: 3, running: 'Adapt the tests' })
-  expect(summarize(parse('# Empty'))).toBeNull()
+test('parses the title, top level items and their indented summaries', async () => {
+  const { title, items } = parse(LIST)
+
+  expect(title).toBe('Nuxt migration')
+  expect(items.map((item) => item.status)).toEqual(['done', 'running', 'open'])
+  expect(items[0]?.summary).toEqual(['Summary of what was done.'])
+  expect(items[2]?.summary).toEqual(['- [ ] an indented line is part of the summary'])
+  expect(items.map((item) => item.line)).toEqual([2, 4, 5])
+  expect(summarize(items)).toEqual({ done: 1, total: 3, running: 'Adapt the tests' })
+  expect(summarize(parse('# Empty').items)).toBeNull()
+})
+
+test('rewrites one mark in place and refuses a line that moved', async () => {
+  const [, running] = parse(LIST).items
+
+  expect(setStatus(LIST, running!, 'done')).toBe(LIST.replace('- [~] Adapt', '- [x] Adapt'))
+  expect(setStatus(`\n${LIST}`, running!, 'done')).toBeNull()
 })
 
 test('labels the count, the running item and a finished list', async () => {
@@ -144,4 +184,47 @@ test('tells the model about broken lines after it edited a todo file', async ($,
   expect(broken.context?.join('\n')).toContain('line 2: `- [*] Odd mark`')
   expect(other.context).toBeUndefined()
   expect(fixed.context).toBeUndefined()
+})
+
+test('lists the items, shows the selected one and checks it off', async ($, on) => {
+  const files = { 'nuxt.md': { text: LIST, mtimeMs: 1 } }
+  engine(on, files)
+  await start($)
+  const pane = await $.ui.mount(PANE)
+
+  expect(await pane.find({ text: 'Nuxt migration' })).toBeDefined()
+  expect(await pane.find({ text: 'Select an item: 1-9 or Enter' })).toBeDefined()
+  expect(await pane.find({ key: 'done' })).toBeUndefined()
+
+  await pane.press({ key: 'item-2' })
+  expect(await pane.find({ text: 'Summary of what was done.' })).toBeDefined()
+  expect(await selectedTitles(pane)).toEqual(['Switch the router'])
+
+  await pane.press({ key: 'item-4' })
+  expect(await pane.find({ text: 'No summary.' })).toBeDefined()
+
+  await pane.press({ key: 'done' })
+  expect(files['nuxt.md'].text).toContain('- [x] Adapt the tests')
+  expect((await pane.find({ key: 'done' }))?.props.label).toBe('reopen')
+})
+
+test('drops the selection when the selected item is pressed again', async ($, on) => {
+  engine(on, { 'nuxt.md': { text: LIST, mtimeMs: 1 } })
+  await start($)
+  const pane = await $.ui.mount(PANE)
+
+  await pane.press({ key: 'item-2' })
+  await pane.press({ key: 'item-2' })
+
+  expect(await selectedTitles(pane)).toEqual([])
+  expect(await pane.find({ text: 'Select an item: 1-9 or Enter' })).toBeDefined()
+})
+
+test('says so when there is no list', async ($, on) => {
+  engine(on, {})
+  await start($)
+
+  const pane = await $.ui.mount(PANE)
+
+  expect(await pane.find({ text: 'No todo list in .todo/ yet.' })).toBeDefined()
 })
