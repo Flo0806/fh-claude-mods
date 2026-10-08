@@ -7,6 +7,7 @@ A Claude Code plugin marketplace with small mods that change Claude Code's own i
 | Mod                          | What it does                                                                                |
 | ---------------------------- | ------------------------------------------------------------------------------------------- |
 | [clausage](plugins/clausage) | Usage and context progress bars above the prompt: 5-hour limit, 7-day limit, context window |
+| [clautodo](plugins/clautodo) | Project todo list in `.todo/*.md`, progress shown under the prompt                          |
 
 ## Install
 
