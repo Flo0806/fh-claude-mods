@@ -5,10 +5,12 @@
   "scripts": {
     "lint": "oxlint",
     "fmt": "oxfmt",
-    "fmt:check": "oxfmt --check"
+    "fmt:check": "oxfmt --check",
+    "typecheck": "tsc -p plugins/clausage"
   },
   "devDependencies": {
     "oxfmt": "^0.72.0",
-    "oxlint": "^1.87.0"
+    "oxlint": "^1.87.0",
+    "typescript": "^7.0.2"
   }
 }
