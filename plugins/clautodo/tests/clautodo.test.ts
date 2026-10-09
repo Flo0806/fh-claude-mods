@@ -1,7 +1,7 @@
 import type { FsEntry, On } from 'claude-code'
 import { expect, mock, test, type Engine, type Mounted } from 'claude-code/testing'
 
-import { addItem, label, parse, problems, setStatus, summarize } from '../hooks/todo'
+import { addItem, label, parse, problems, renameItem, setStatus, summarize } from '../hooks/todo'
 
 const ROOT = '/project'
 
@@ -29,8 +29,14 @@ const file = (name: string, mtimeMs: number): FsEntry => ({
   isLink: false,
 })
 
+// Whether the engine holds the pane open; ui.close clears it.
+let open = true
+
+const PANE_ROW = { id: 'clautodo', title: 'Todo', isShown: true, isFocused: true, isPlaced: true }
+
 // The engine beneath the mod, with a .todo folder held in memory.
 const engine = (on: On, files: Record<string, { text: string; mtimeMs: number }>) => {
+  open = true
   const clock = mock.clock(on, { now: 0 })
   on('session.start', () => ({ cwd: ROOT }))
   on('session.root', () => ({ value: ROOT }))
@@ -44,6 +50,11 @@ const engine = (on: On, files: Record<string, { text: string; mtimeMs: number }>
   })
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.panes', () => ({ value: open ? [PANE_ROW] : [] }))
+  on('ui.close', () => {
+    open = false
+    return { value: undefined }
+  })
   on('ui.render', { component: 'PromptHint' }, ($, e) =>
     $.ui.resolve(e).Text({ children: e.props.tail ?? '' }),
   )
@@ -257,6 +268,85 @@ test('closes the field without a change on an empty title', async ($, on) => {
 
   expect(files['nuxt.md'].text).toBe(LIST)
   expect(await pane.find({ key: 'add' })).toBeDefined()
+})
+
+test('renames an item, keeps its mark and adds further lines to its summary', async () => {
+  const [done, running] = parse(LIST).items
+
+  expect(renameItem(LIST, running!, 'Fix the tests')).toBe(
+    LIST.replace('- [~] Adapt the tests', '- [~] Fix the tests'),
+  )
+  expect(renameItem(LIST, done!, 'Router\nAlso the guards')).toBe(
+    LIST.replace(
+      '- [x] Switch the router\n  Summary of what was done.\n',
+      '- [x] Router\n  Summary of what was done.\n  Also the guards\n',
+    ),
+  )
+  expect(renameItem(LIST, running!, '  ')).toBeNull()
+  expect(renameItem(`\n${LIST}`, running!, 'Moved')).toBeNull()
+})
+
+test('edits the title of the selected item from the pane', async ($, on) => {
+  const files = { 'nuxt.md': { text: LIST, mtimeMs: 1 } }
+  engine(on, files)
+  await start($)
+  const pane = await $.ui.mount(PANE)
+
+  expect(await pane.find({ key: 'edit' })).toBeUndefined()
+  await pane.press({ key: 'item-4' })
+  await pane.press({ key: 'edit' })
+
+  expect((await pane.find({ key: 'edit-item' }))?.props.value).toBe('Adapt the tests')
+  await pane.input({ key: 'edit-item', text: 'Fix the tests' })
+
+  expect(files['nuxt.md'].text).toContain('- [~] Fix the tests')
+  expect(await pane.find({ key: 'edit-item' })).toBeUndefined()
+  expect(await selectedTitles(pane)).toEqual(['Fix the tests'])
+})
+
+test('leaves the file alone when the title is submitted unchanged', async ($, on) => {
+  const files = { 'nuxt.md': { text: LIST, mtimeMs: 1 } }
+  engine(on, files)
+  await start($)
+  const pane = await $.ui.mount(PANE)
+
+  await pane.press({ key: 'item-4' })
+  await pane.press({ key: 'edit' })
+  await pane.input({ key: 'edit-item', text: 'Adapt the tests' })
+
+  expect(files['nuxt.md'].mtimeMs).toBe(1)
+  expect(await pane.find({ key: 'edit' })).toBeDefined()
+})
+
+test('says in the pane when the list changed before a write', async ($, on) => {
+  const files = { 'nuxt.md': { text: LIST, mtimeMs: 1 } }
+  engine(on, files)
+  await start($)
+  const pane = await $.ui.mount(PANE)
+
+  await pane.press({ key: 'item-4' })
+  files['nuxt.md'].text = `\n${LIST}`
+  await pane.press({ key: 'done' })
+
+  expect(files['nuxt.md'].text).toBe(`\n${LIST}`)
+  expect(await pane.find({ text: 'The list changed meanwhile, try again.' })).toBeDefined()
+})
+
+test('closes itself after two idle minutes, but never while a field is open', async ($, on) => {
+  const clock = engine(on, { 'nuxt.md': { text: LIST, mtimeMs: 1 } })
+  await start($)
+  const pane = await $.ui.mount(PANE)
+
+  await pane.press({ key: 'add' })
+  await clock.advance(5 * 60 * 1000)
+  expect(open).toBe(true)
+
+  await pane.input({ key: 'new-item', text: '' })
+  await clock.advance(60 * 1000)
+  expect(open).toBe(true)
+
+  await clock.advance(75 * 1000)
+  expect(open).toBe(false)
 })
 
 test('says so when there is no list', async ($, on) => {

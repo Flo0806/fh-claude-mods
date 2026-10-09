@@ -1,17 +1,24 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, ToolCallResult } from 'claude-code'
 
-import type { Item, Status, TodoList } from '../types'
+import type { Item, Mode, Status, TodoList } from '../types'
 import { DISABLED, RULES } from './rules'
-import { addItem, label, parse, problems, setStatus, summarize } from './todo'
+import { addItem, label, parse, problems, renameItem, setStatus, summarize } from './todo'
 
 const list = atom({ plugin: 'clautodo', key: 'list' } as const, null)
 const selected = atom({ plugin: 'clautodo', key: 'selected' } as const, null)
 const mode = atom({ plugin: 'clautodo', key: 'mode' } as const, 'view')
+// Shown in the pane, where a toast would wait until it closes.
+const notice = atom({ plugin: 'clautodo', key: 'notice' } as const, null)
 
 const PANE = 'clautodo'
 
 const POLL_MS = 2000
+
+// The pane closes by itself after this long without a press or an open field.
+const IDLE_MS = 2 * 60 * 1000
+
+const IDLE_CHECK_MS = 15 * 1000
 
 const TODO_FILE = /(^|\/)\.todo\/[^/]+\.md$/
 
@@ -72,18 +79,38 @@ const load = async ($: EngineInterface, force = false) => {
   await update($, list, () => latest)
 }
 
+// When the person last did something in the pane.
+let lastActivity = 0
+
+const touch = async ($: EngineInterface) => {
+  lastActivity = await $.clock.now()
+}
+
+const select = async ($: EngineInterface, index: number) => {
+  await touch($)
+  await update($, notice, () => null)
+  await update($, selected, (current) => (current === index ? null : index))
+}
+
+// An open field counts as activity, so typing is never cut off.
+const closeWhenIdle = async ($: EngineInterface) => {
+  const isOpen = (await $.ui.panes()).some((pane) => pane.id === PANE)
+  const isIdle = (await $.clock.now()) - lastActivity >= IDLE_MS
+  if (isOpen && isIdle && (await read($, mode)) === 'view') await $.ui.close({ id: PANE })
+}
+
 // Reads the file again before writing, so an edit made meanwhile is kept.
 const rewrite = async (
   $: EngineInterface,
   path: string,
   change: (text: string) => string | null,
 ) => {
+  await touch($)
   const changed = change(String(await $.fs.read(path)))
-  if (changed === null) {
-    $.ui.toast('The list changed meanwhile, try again.')
-  } else {
-    await $.fs.write(path, changed)
-  }
+  if (changed !== null) await $.fs.write(path, changed)
+  await update($, notice, () =>
+    changed === null ? 'The list changed meanwhile, try again.' : null,
+  )
   await load($, true)
 }
 
@@ -92,6 +119,7 @@ const changeStatus = ($: EngineInterface, path: string, item: Item, status: Stat
 
 // An empty title just closes the field.
 const add = async ($: EngineInterface, path: string, count: number, title: string) => {
+  await touch($)
   const trimmed = title.trim()
   if (trimmed !== '') {
     await rewrite($, path, (text) => addItem(text, trimmed))
@@ -100,10 +128,22 @@ const add = async ($: EngineInterface, path: string, count: number, title: strin
   await update($, mode, () => 'view')
 }
 
-const startAdding = async ($: EngineInterface) => {
-  await update($, mode, () => 'add')
+// An empty or unchanged title just closes the field.
+const rename = async ($: EngineInterface, path: string, item: Item, entry: string) => {
+  await touch($)
+  if (entry.trim() !== '' && entry.trim() !== item.title) {
+    await rewrite($, path, (text) => renameItem(text, item, entry))
+  }
+  await update($, mode, () => 'view')
+}
+
+const FIELD: Record<Exclude<Mode, 'view'>, string> = { add: 'new-item', edit: 'edit-item' }
+
+const openField = async ($: EngineInterface, next: Exclude<Mode, 'view'>) => {
+  await touch($)
+  await update($, mode, () => next)
   // Moving the ring is a convenience: without it the field still takes a click or Tab.
-  await $.ui.focus({ requestId: PANE, key: 'new-item' }).catch(() => undefined)
+  await $.ui.focus({ requestId: PANE, key: FIELD[next] }).catch(() => undefined)
 }
 
 export const register: Register = (on) => {
@@ -111,6 +151,7 @@ export const register: Register = (on) => {
     await $.command.register({ name: 'todo', description: 'Show the todo list' })
     await load($, true)
     $.clock.every(POLL_MS, () => void load($))
+    $.clock.every(IDLE_CHECK_MS, () => void closeWhenIdle($))
     return next(e)
   })
 
@@ -118,6 +159,8 @@ export const register: Register = (on) => {
     await load($, true)
     await update($, selected, () => null)
     await update($, mode, () => 'view')
+    await update($, notice, () => null)
+    await touch($)
     await $.ui.open({ id: PANE, title: 'Todo', focus: true, closeOnEscape: true })
     return {}
   })
@@ -163,7 +206,11 @@ export const register: Register = (on) => {
     const chosen = await read($, selected)
     const index = chosen !== null && chosen < items.length ? chosen : null
     const item = index === null ? undefined : items[index]
-    const isAdding = (await read($, mode)) === 'add'
+    const shown = await read($, mode)
+    const warning = await read($, notice)
+    const isAdding = shown === 'add'
+    const isEditing = shown === 'edit' && item !== undefined
+    const hasField = (isAdding || isEditing) && Input !== undefined
 
     return (
       <Box flexDirection="column" gap={1}>
@@ -175,7 +222,7 @@ export const register: Register = (on) => {
               key={`item-${one.line}`}
               plain
               hotkey={i < 9 ? String(i + 1) : undefined}
-              onPress={() => update($, selected, (current) => (current === i ? null : i))}
+              onPress={() => select($, i)}
             >
               <Text color={COLOR[one.status]}>{GLYPH[one.status]}</Text>{' '}
               <Text
@@ -197,6 +244,15 @@ export const register: Register = (on) => {
             autoFocus
             onSubmit={(value: string) => add($, path, items.length, value)}
           />
+        ) : isEditing && Input ? (
+          <Input
+            key="edit-item"
+            label="Title"
+            value={item.title}
+            placeholder="More lines are added to the summary, empty to cancel"
+            autoFocus
+            onSubmit={(value: string) => rename($, path, item, value)}
+          />
         ) : item ? (
           <Box flexDirection="column" gap={1}>
             <Box flexDirection="column" borderStyle="round" paddingX={1}>
@@ -212,7 +268,9 @@ export const register: Register = (on) => {
           <Text dimColor>Select an item: 1-9 or Enter</Text>
         )}
 
-        {!isAdding && (
+        {warning && <Text color="warning">{warning}</Text>}
+
+        {!hasField && (
           <Box gap={2}>
             {item && (
               <Button
@@ -232,7 +290,12 @@ export const register: Register = (on) => {
                 onPress={() => changeStatus($, path, item, 'running')}
               />
             )}
-            {Input && <Button key="add" hotkey="a" label="add" onPress={() => startAdding($)} />}
+            {item && Input && (
+              <Button key="edit" hotkey="e" label="edit" onPress={() => openField($, 'edit')} />
+            )}
+            {Input && (
+              <Button key="add" hotkey="a" label="add" onPress={() => openField($, 'add')} />
+            )}
           </Box>
         )}
       </Box>

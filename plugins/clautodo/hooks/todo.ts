@@ -35,24 +35,55 @@ export const parse = (text: string): { title?: string; items: Item[] } => {
   return { title, items }
 }
 
-// Rewrites one item's mark; null when the line no longer holds that item.
+// The item's line split into mark and title; null when the line no longer holds that item.
+const itemAt = (lines: string[], item: Item) => {
+  const match = ITEM.exec(lines[item.line]?.trimEnd() ?? '')
+  return match && match[2]!.trim() === item.title ? { mark: match[1]!, title: match[2]! } : null
+}
+
+// The first line of an entry is a title, the others its summary; blank lines drop out.
+const splitEntry = (entry: string) => {
+  const [title = '', ...summary] = entry
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line !== '')
+  return { title, summary: summary.map((line) => `  ${line}`) }
+}
+
+// The index right after an item and its summary, trailing blank lines left out.
+const blockEnd = (lines: string[], line: number) => {
+  let at = line + 1
+  while (at < lines.length && (lines[at]!.trim() === '' || /^\s+\S/.test(lines[at]!))) at++
+  while (at > line + 1 && lines[at - 1]!.trim() === '') at--
+  return at
+}
+
 export const setStatus = (text: string, item: Item, status: Status): string | null => {
   const lines = text.split('\n')
-  const match = ITEM.exec(lines[item.line]?.trimEnd() ?? '')
-  if (!match || match[2]!.trim() !== item.title) return null
+  const found = itemAt(lines, item)
+  if (!found) return null
 
-  lines[item.line] = `- [${MARK_OF[status]}] ${match[2]}`
+  lines[item.line] = `- [${MARK_OF[status]}] ${found.title}`
+  return lines.join('\n')
+}
+
+// Keeps the mark; further lines of `entry` are added to the end of the summary.
+export const renameItem = (text: string, item: Item, entry: string): string | null => {
+  const lines = text.split('\n')
+  const found = itemAt(lines, item)
+  const { title, summary } = splitEntry(entry)
+  if (!found || title === '') return null
+
+  lines.splice(blockEnd(lines, item.line), 0, ...summary)
+  lines[item.line] = `- [${found.mark}] ${title}`
   return lines.join('\n')
 }
 
 // Adds an open item right after the last one and its summary, or below the heading without items.
 // The first line of `entry` is the title, the rest becomes its indented summary.
 export const addItem = (text: string, entry: string): string => {
-  const [title = '', ...summary] = entry
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line !== '')
-  const added = [`- [ ] ${title}`, ...summary.map((line) => `  ${line}`)]
+  const { title, summary } = splitEntry(entry)
+  const added = [`- [ ] ${title}`, ...summary]
   const lines = text.split('\n')
   const last = lines.findLastIndex((line) => ITEM.test(line.trimEnd()))
 
@@ -62,11 +93,7 @@ export const addItem = (text: string, entry: string): string => {
     return [...head, ...added, ''].join('\n')
   }
 
-  let at = last + 1
-  while (at < lines.length && (lines[at]!.trim() === '' || /^\s+\S/.test(lines[at]!))) at++
-  while (at > last + 1 && lines[at - 1]!.trim() === '') at--
-
-  lines.splice(at, 0, ...added)
+  lines.splice(blockEnd(lines, last), 0, ...added)
   return lines.join('\n')
 }
 

@@ -29,15 +29,18 @@ Only unindented items count; indented lines belong to the item above.
 
 `/todo` opens the list in a pane:
 
-| Key            | Does                                                   |
-| -------------- | ------------------------------------------------------ |
-| `1-9`, `Enter` | select an item and show its summary, again to deselect |
-| `x`            | check the selected item off, or reopen it              |
-| `s`            | mark the selected item as running                      |
-| `a`            | add an item; more lines become its summary             |
-| `Esc`          | close                                                  |
+| Key            | Does                                                                |
+| -------------- | ------------------------------------------------------------------- |
+| `1-9`, `Enter` | select an item and show its summary, again to deselect              |
+| `x`            | check the selected item off, or reopen it                           |
+| `s`            | mark the selected item as running                                   |
+| `e`            | edit the selected item's title; more lines are added to its summary |
+| `a`            | add an item; more lines become its summary                          |
+| `Esc`          | close                                                               |
 
 A change is written straight into the file, after reading it again, so an edit made meanwhile is kept.
+
+The pane closes by itself after two minutes without a key press, never while a field is open.
 
 ## For Claude
 
