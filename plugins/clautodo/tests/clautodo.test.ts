@@ -1,7 +1,7 @@
 import type { FsEntry, On } from 'claude-code'
 import { expect, mock, test, type Engine, type Mounted } from 'claude-code/testing'
 
-import { label, parse, problems, setStatus, summarize } from '../hooks/todo'
+import { addItem, label, parse, problems, setStatus, summarize } from '../hooks/todo'
 
 const ROOT = '/project'
 
@@ -218,6 +218,45 @@ test('drops the selection when the selected item is pressed again', async ($, on
 
   expect(await selectedTitles(pane)).toEqual([])
   expect(await pane.find({ text: 'Select an item: 1-9 or Enter' })).toBeDefined()
+})
+
+test('adds an item after the last one and its summary', async () => {
+  const withNotes = `${LIST}\n## Notes\nfree text\n`
+
+  expect(addItem(LIST, 'New one')).toBe(LIST.replace('summary\n', 'summary\n- [ ] New one\n'))
+  expect(addItem(withNotes, 'New one')).toContain('summary\n- [ ] New one\n\n## Notes')
+  expect(addItem('# Empty\n', 'First')).toBe('# Empty\n\n- [ ] First\n')
+  expect(addItem('', 'First')).toBe('- [ ] First\n')
+  expect(addItem('', 'First\n  second line\n\nthird\n')).toBe(
+    '- [ ] First\n  second line\n  third\n',
+  )
+})
+
+test('adds an item from the pane and selects it', async ($, on) => {
+  const files = { 'nuxt.md': { text: LIST, mtimeMs: 1 } }
+  engine(on, files)
+  await start($)
+  const pane = await $.ui.mount(PANE)
+
+  await pane.press({ key: 'add' })
+  await pane.input({ key: 'new-item', text: 'Write the changelog' })
+
+  expect(files['nuxt.md'].text).toContain('- [ ] Write the changelog')
+  expect(await selectedTitles(pane)).toEqual(['Write the changelog'])
+  expect(await pane.find({ key: 'new-item' })).toBeUndefined()
+})
+
+test('closes the field without a change on an empty title', async ($, on) => {
+  const files = { 'nuxt.md': { text: LIST, mtimeMs: 1 } }
+  engine(on, files)
+  await start($)
+  const pane = await $.ui.mount(PANE)
+
+  await pane.press({ key: 'add' })
+  await pane.input({ key: 'new-item', text: '  ' })
+
+  expect(files['nuxt.md'].text).toBe(LIST)
+  expect(await pane.find({ key: 'add' })).toBeDefined()
 })
 
 test('says so when there is no list', async ($, on) => {

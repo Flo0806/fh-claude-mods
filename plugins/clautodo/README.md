@@ -34,6 +34,7 @@ Only unindented items count; indented lines belong to the item above.
 | `1-9`, `Enter` | select an item and show its summary, again to deselect |
 | `x`            | check the selected item off, or reopen it              |
 | `s`            | mark the selected item as running                      |
+| `a`            | add an item; more lines become its summary             |
 | `Esc`          | close                                                  |
 
 A change is written straight into the file, after reading it again, so an edit made meanwhile is kept.

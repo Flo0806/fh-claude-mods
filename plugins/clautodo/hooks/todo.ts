@@ -45,6 +45,31 @@ export const setStatus = (text: string, item: Item, status: Status): string | nu
   return lines.join('\n')
 }
 
+// Adds an open item right after the last one and its summary, or below the heading without items.
+// The first line of `entry` is the title, the rest becomes its indented summary.
+export const addItem = (text: string, entry: string): string => {
+  const [title = '', ...summary] = entry
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line !== '')
+  const added = [`- [ ] ${title}`, ...summary.map((line) => `  ${line}`)]
+  const lines = text.split('\n')
+  const last = lines.findLastIndex((line) => ITEM.test(line.trimEnd()))
+
+  if (last === -1) {
+    while (lines.at(-1)?.trim() === '') lines.pop()
+    const head = lines.length > 0 ? [...lines, ''] : []
+    return [...head, ...added, ''].join('\n')
+  }
+
+  let at = last + 1
+  while (at < lines.length && (lines[at]!.trim() === '' || /^\s+\S/.test(lines[at]!))) at++
+  while (at > last + 1 && lines[at - 1]!.trim() === '') at--
+
+  lines.splice(at, 0, ...added)
+  return lines.join('\n')
+}
+
 // An unindented line that starts like an item but is not one.
 const BROKEN = /^[-*+]\s*\[/
 

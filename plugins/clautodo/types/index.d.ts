@@ -5,10 +5,13 @@ export type Item = { title: string; status: Status; summary: string[]; line: num
 
 export type TodoList = { path: string; title?: string; items: Item[] }
 
+// What the pane shows below the list: the selected item, or a field for a new one.
+export type Mode = 'view' | 'add'
+
 export type Summary = { done: number; total: number; running?: string }
 
 declare module 'claude-code' {
   interface PluginState {
-    clautodo: { list: TodoList | null; selected: number | null }
+    clautodo: { list: TodoList | null; selected: number | null; mode: Mode }
   }
 }

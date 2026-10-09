@@ -3,10 +3,11 @@ import type { EngineInterface, Register, ToolCallResult } from 'claude-code'
 
 import type { Item, Status, TodoList } from '../types'
 import { DISABLED, RULES } from './rules'
-import { label, parse, problems, setStatus, summarize } from './todo'
+import { addItem, label, parse, problems, setStatus, summarize } from './todo'
 
 const list = atom({ plugin: 'clautodo', key: 'list' } as const, null)
 const selected = atom({ plugin: 'clautodo', key: 'selected' } as const, null)
+const mode = atom({ plugin: 'clautodo', key: 'mode' } as const, 'view')
 
 const PANE = 'clautodo'
 
@@ -72,14 +73,37 @@ const load = async ($: EngineInterface, force = false) => {
 }
 
 // Reads the file again before writing, so an edit made meanwhile is kept.
-const changeStatus = async ($: EngineInterface, path: string, item: Item, status: Status) => {
-  const changed = setStatus(String(await $.fs.read(path)), item, status)
+const rewrite = async (
+  $: EngineInterface,
+  path: string,
+  change: (text: string) => string | null,
+) => {
+  const changed = change(String(await $.fs.read(path)))
   if (changed === null) {
     $.ui.toast('The list changed meanwhile, try again.')
   } else {
     await $.fs.write(path, changed)
   }
   await load($, true)
+}
+
+const changeStatus = ($: EngineInterface, path: string, item: Item, status: Status) =>
+  rewrite($, path, (text) => setStatus(text, item, status))
+
+// An empty title just closes the field.
+const add = async ($: EngineInterface, path: string, count: number, title: string) => {
+  const trimmed = title.trim()
+  if (trimmed !== '') {
+    await rewrite($, path, (text) => addItem(text, trimmed))
+    await update($, selected, () => count)
+  }
+  await update($, mode, () => 'view')
+}
+
+const startAdding = async ($: EngineInterface) => {
+  await update($, mode, () => 'add')
+  // Moving the ring is a convenience: without it the field still takes a click or Tab.
+  await $.ui.focus({ requestId: PANE, key: 'new-item' }).catch(() => undefined)
 }
 
 export const register: Register = (on) => {
@@ -93,6 +117,7 @@ export const register: Register = (on) => {
   on('command.run', { command: 'todo' }, async ($) => {
     await load($, true)
     await update($, selected, () => null)
+    await update($, mode, () => 'view')
     await $.ui.open({ id: PANE, title: 'Todo', focus: true, closeOnEscape: true })
     return {}
   })
@@ -124,7 +149,10 @@ export const register: Register = (on) => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Button, Text } = $.ui.resolve(e)
+    const elements = $.ui.resolve(e)
+    const { Box, Button, Text } = elements
+    // Mobile has no text field, so it cannot add items.
+    const Input = 'Input' in elements ? elements.Input : undefined
     const todos = await read($, list)
 
     if (todos === null || todos.items.length === 0) {
@@ -135,6 +163,7 @@ export const register: Register = (on) => {
     const chosen = await read($, selected)
     const index = chosen !== null && chosen < items.length ? chosen : null
     const item = index === null ? undefined : items[index]
+    const isAdding = (await read($, mode)) === 'add'
 
     return (
       <Box flexDirection="column" gap={1}>
@@ -160,7 +189,15 @@ export const register: Register = (on) => {
           ))}
         </Box>
 
-        {item ? (
+        {isAdding && Input ? (
+          <Input
+            key="new-item"
+            label="New item"
+            placeholder="Title, Enter to add, empty to cancel"
+            autoFocus
+            onSubmit={(value: string) => add($, path, items.length, value)}
+          />
+        ) : item ? (
           <Box flexDirection="column" gap={1}>
             <Box flexDirection="column" borderStyle="round" paddingX={1}>
               <Text bold>{item.title}</Text>
@@ -170,8 +207,14 @@ export const register: Register = (on) => {
                 <Text dimColor>No summary.</Text>
               )}
             </Box>
+          </Box>
+        ) : (
+          <Text dimColor>Select an item: 1-9 or Enter</Text>
+        )}
 
-            <Box gap={2}>
+        {!isAdding && (
+          <Box gap={2}>
+            {item && (
               <Button
                 key="done"
                 hotkey="x"
@@ -180,18 +223,17 @@ export const register: Register = (on) => {
                   changeStatus($, path, item, item.status === 'done' ? 'open' : 'done')
                 }
               />
-              {item.status !== 'running' && (
-                <Button
-                  key="start"
-                  hotkey="s"
-                  label="start"
-                  onPress={() => changeStatus($, path, item, 'running')}
-                />
-              )}
-            </Box>
+            )}
+            {item && item.status !== 'running' && (
+              <Button
+                key="start"
+                hotkey="s"
+                label="start"
+                onPress={() => changeStatus($, path, item, 'running')}
+              />
+            )}
+            {Input && <Button key="add" hotkey="a" label="add" onPress={() => startAdding($)} />}
           </Box>
-        ) : (
-          <Text dimColor>Select an item: 1-9 or Enter</Text>
         )}
       </Box>
     )
