@@ -1,0 +1,8 @@
+{
+  "name": "clautodo",
+  "version": "0.1.0",
+  "description": "A project todo list in .todo/*.md, its progress shown in one dim line under the prompt",
+  "author": { "name": "Florian Heuberger" },
+  "keywords": ["todo", "tasks", "progress", "projects", "pane", "statusbar"],
+  "types": "./types/index.d.ts"
+}

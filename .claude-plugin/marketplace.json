@@ -1,11 +1,19 @@
 {
   "name": "fh-claude-mods",
-  "owner": { "name": "Florian Heuberger" },
+  "description": "Kleine Mods, die die Oberfläche von Claude Code selbst verändern",
+  "owner": {
+    "name": "Florian Heuberger"
+  },
   "plugins": [
     {
       "name": "clausage",
       "source": "./plugins/clausage",
       "description": "Kompakte Usage-Anzeige: 5h-Limit, 7-Tage-Limit und Context als farbige Progressbars"
+    },
+    {
+      "name": "clautodo",
+      "source": "./plugins/clautodo",
+      "description": "Projekt-Todo-Liste in .todo/*.md, Fortschritt als eine dezente Zeile unter dem Prompt"
     }
   ]
 }
