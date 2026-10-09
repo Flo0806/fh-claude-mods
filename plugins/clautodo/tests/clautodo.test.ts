@@ -5,6 +5,7 @@ import {
   addItem,
   deleteItem,
   editSummary,
+  fileName,
   label,
   parse,
   problems,
@@ -58,6 +59,7 @@ const engine = (on: On, files: Record<string, { text: string; mtimeMs: number }>
     files[e.path.split('/').pop() ?? ''] = { text: e.text, mtimeMs: clock.now() + 1 }
     return { value: undefined }
   })
+  on('fs.exists', (_$, e) => ({ value: (e.path.split('/').pop() ?? '') in files }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.panes', () => ({ value: open ? [PANE_ROW] : [] }))
@@ -518,6 +520,49 @@ test('goes back to the items without a change', async ($, on) => {
 
   expect(await pane.find({ text: 'Nuxt migration' })).toBeDefined()
   expect(Object.keys(files)).toEqual(['nuxt.md'])
+})
+
+test('turns a project title into a file name', async () => {
+  expect(fileName('Nuxt Migration')).toBe('nuxt-migration.md')
+  expect(fileName('Größe & Übersicht!')).toBe('grosse-ubersicht.md')
+  expect(fileName('  ***  ')).toBe('todo.md')
+})
+
+test('creates a project, makes it active and shows its empty list', async ($, on) => {
+  const files: Record<string, { text: string; mtimeMs: number }> = {
+    'nuxt.md': { text: LIST, mtimeMs: 1 },
+  }
+  engine(on, files)
+  await start($)
+  const pane = await $.ui.mount(PANE)
+
+  await pane.press({ key: 'projects' })
+  await pane.press({ key: 'new' })
+  await pane.input({ key: 'new-project', text: 'Nuxt Docs' })
+
+  expect(files['nuxt-docs.md']?.text).toBe('# Nuxt Docs\n\n')
+  expect(files['.active']?.text).toBe('nuxt-docs.md\n')
+  expect(await pane.find({ text: 'Nuxt Docs' })).toBeDefined()
+  expect(await pane.find({ text: 'No items yet.' })).toBeDefined()
+  expect(await pane.find({ key: 'add' })).toBeDefined()
+})
+
+test('refuses a project whose file exists already', async ($, on) => {
+  const files = { 'nuxt.md': { text: LIST, mtimeMs: 1 } }
+  engine(on, files)
+  await start($)
+  const pane = await $.ui.mount(PANE)
+
+  await pane.press({ key: 'projects' })
+  await pane.press({ key: 'new' })
+  await pane.input({ key: 'new-project', text: 'Nuxt' })
+
+  expect(files['nuxt.md'].text).toBe(LIST)
+  expect(await pane.find({ text: 'nuxt.md exists already.' })).toBeDefined()
+  expect(await pane.find({ text: 'Projects' })).toBeDefined()
+
+  await pane.press({ key: 'projects' })
+  expect(await pane.find({ text: 'nuxt.md exists already.' })).toBeUndefined()
 })
 
 test('says so when there is no list', async ($, on) => {

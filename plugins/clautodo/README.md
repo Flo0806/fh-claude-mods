@@ -41,7 +41,7 @@ Only unindented items count; indented lines belong to the item above.
 | `↑ ↓`, `Enter` on a summary line | edit that line; empty removes it, more lines are added below       |
 | `Esc`                            | cancel an open field, a pending delete or the projects, else close |
 
-In the projects every `.todo/*.md` shows with its progress; `1-9` or `Enter` makes one the active list.
+In the projects every `.todo/*.md` shows with its progress; `1-9` or `Enter` makes one the active list, `n` starts a new one from a title (`Nuxt Migration` becomes `nuxt-migration.md`) and makes it active.
 
 A change is written straight into the file, after reading it again, so an edit made meanwhile is kept.
 

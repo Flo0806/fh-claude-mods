@@ -158,3 +158,15 @@ export const label = ({ done, total, running }: Summary) => {
   const count = `${done === total ? '☑' : '☐'} ${done}/${total}`
   return running ? `${count} · ${running}` : count
 }
+
+// A file name for a project title: `Nuxt Migration` is `nuxt-migration.md`.
+export const fileName = (title: string) => {
+  const slug = title
+    .toLowerCase()
+    .replaceAll('ß', 'ss')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+  return `${slug || 'todo'}.md`
+}

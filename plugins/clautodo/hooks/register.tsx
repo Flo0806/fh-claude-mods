@@ -7,6 +7,7 @@ import {
   addItem,
   deleteItem,
   editSummary,
+  fileName,
   label,
   parse,
   problems,
@@ -112,9 +113,28 @@ const readProjects = async ($: EngineInterface): Promise<Project[]> => {
 
 const toggleProjects = async ($: EngineInterface) => {
   await touch($)
+  await update($, notice, () => null)
   const isOpen = (await read($, projects)) !== null
   const next = isOpen ? null : await readProjects($)
   await update($, projects, () => next)
+}
+
+// Starts a list with the title as its heading and makes it the active one; an empty title just
+// closes the field.
+const create = async ($: EngineInterface, title: string) => {
+  await touch($)
+  await update($, mode, () => 'view')
+  const trimmed = title.trim()
+  if (trimmed === '') return
+
+  const name = fileName(trimmed)
+  const path = `${await todoDir($)}/${name}`
+  if (await $.fs.exists(path)) {
+    await update($, notice, () => `${name} exists already.`)
+    return
+  }
+  await $.fs.write(path, `# ${trimmed}\n\n`)
+  await activate($, name)
 }
 
 // Writes .todo/.active and shows that list's items.
@@ -234,6 +254,7 @@ const FIELD: Record<Exclude<Mode, 'view'>, string> = {
   add: 'new-item',
   edit: 'edit-item',
   line: 'summary-line',
+  project: 'new-project',
 }
 
 const openLine = async ($: EngineInterface, index: number) => {
@@ -246,6 +267,7 @@ const returnTo = async ($: EngineInterface, field: Exclude<Mode, 'view'>) => {
   const index = await read($, selected)
   const item = index === null ? undefined : (await read($, list))?.items[index]
   if (field === 'line') return `summary-${await read($, line)}`
+  if (field === 'project') return 'new'
   return field === 'edit' && item ? 'title' : 'add'
 }
 
@@ -287,7 +309,7 @@ export const register: Register = (on) => {
   on('ui.close', { id: PANE }, async ($, e, next) => {
     const field = await read($, mode)
     const isAsking = await read($, confirming)
-    if (e.origin.kind === 'person' && (await read($, projects)) !== null) {
+    if (e.origin.kind === 'person' && field === 'view' && (await read($, projects)) !== null) {
       await toggleProjects($)
       await refocus($, 'projects')
       return { value: undefined }
@@ -341,7 +363,10 @@ export const register: Register = (on) => {
       />
     )
 
+    const shown = await read($, mode)
+
     if (shownProjects) {
+      const warning = await read($, notice)
       const active = todos?.path.split('/').pop()
       return (
         <Box flexDirection="column" gap={1}>
@@ -367,12 +392,35 @@ export const register: Register = (on) => {
               </Button>
             ))}
           </Box>
-          <Box gap={2}>{switchButton}</Box>
+          {shown === 'project' && Input ? (
+            <Input
+              key="new-project"
+              label="New project"
+              placeholder="Title, Enter to create, empty to cancel"
+              autoFocus
+              onSubmit={(value: string) => create($, value)}
+            />
+          ) : (
+            <Box flexDirection="column" gap={1}>
+              {warning && <Text color="warning">{warning}</Text>}
+              <Box gap={2}>
+                {switchButton}
+                {Input && (
+                  <Button
+                    key="new"
+                    hotkey="n"
+                    label="new"
+                    onPress={() => openField($, 'project')}
+                  />
+                )}
+              </Box>
+            </Box>
+          )}
         </Box>
       )
     }
 
-    if (todos === null || todos.items.length === 0) {
+    if (todos === null) {
       return (
         <Box flexDirection="column" gap={1}>
           <Text dimColor>No todo list in .todo/ yet.</Text>
@@ -385,7 +433,6 @@ export const register: Register = (on) => {
     const chosen = await read($, selected)
     const index = chosen !== null && chosen < items.length ? chosen : null
     const item = index === null ? undefined : items[index]
-    const shown = await read($, mode)
     const isAsking = (await read($, confirming)) && item !== undefined
     const warning = isAsking
       ? `Delete "${item.title}" and its summary? Press d again.`
@@ -400,6 +447,7 @@ export const register: Register = (on) => {
         <Text bold>{title ?? path.split('/').pop()}</Text>
 
         <Box flexDirection="column">
+          {items.length === 0 && <Text dimColor>No items yet.</Text>}
           {items.map((one, i) => (
             <Button
               key={`item-${one.line}`}
@@ -469,7 +517,7 @@ export const register: Register = (on) => {
             </Box>
           </Box>
         ) : (
-          <Text dimColor>Select an item: 1-9 or Enter</Text>
+          items.length > 0 && <Text dimColor>Select an item: 1-9 or Enter</Text>
         )}
 
         {warning && <Text color="warning">{warning}</Text>}

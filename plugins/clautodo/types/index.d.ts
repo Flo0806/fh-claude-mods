@@ -5,9 +5,9 @@ export type Item = { title: string; status: Status; summary: string[]; line: num
 
 export type TodoList = { path: string; title?: string; items: Item[] }
 
-// What the pane shows below the list: the selected item, or a field to add an item, edit its
-// title or one line of its summary.
-export type Mode = 'view' | 'add' | 'edit' | 'line'
+// Which field the pane shows, if any: to add an item, edit its title or one line of its summary,
+// or name a new project.
+export type Mode = 'view' | 'add' | 'edit' | 'line' | 'project'
 
 export type Summary = { done: number; total: number; running?: string }
 
