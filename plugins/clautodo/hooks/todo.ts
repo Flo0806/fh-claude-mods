@@ -79,6 +79,36 @@ export const renameItem = (text: string, item: Item, entry: string): string | nu
   return lines.join('\n')
 }
 
+// Replaces one summary line, keeping its indent; an empty entry removes it, more lines take its place.
+export const editSummary = (
+  text: string,
+  item: Item,
+  index: number,
+  entry: string,
+): string | null => {
+  const lines = text.split('\n')
+  if (!itemAt(lines, item)) return null
+
+  const at = summaryLines(lines, item.line)[index]
+  if (at === undefined || lines[at]!.trim() !== item.summary[index]) return null
+
+  const indent = /^\s*/.exec(lines[at]!)![0]
+  const { title, summary } = splitEntry(entry)
+  const replaced = title === '' ? [] : [title, ...summary.map((line) => line.trim())]
+  lines.splice(at, 1, ...replaced.map((line) => `${indent}${line}`))
+  return lines.join('\n')
+}
+
+// The file indices of an item's summary lines, as parse collects them.
+const summaryLines = (lines: string[], line: number) => {
+  const found: number[] = []
+  for (let at = line + 1; at < lines.length; at++) {
+    if (/^\s+\S/.test(lines[at]!)) found.push(at)
+    else if (lines[at]!.trim() !== '') break
+  }
+  return found
+}
+
 // Adds an open item right after the last one and its summary, or below the heading without items.
 // The first line of `entry` is the title, the rest becomes its indented summary.
 export const addItem = (text: string, entry: string): string => {

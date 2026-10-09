@@ -1,7 +1,16 @@
 import type { FsEntry, On } from 'claude-code'
 import { expect, mock, test, type Engine, type Mounted } from 'claude-code/testing'
 
-import { addItem, label, parse, problems, renameItem, setStatus, summarize } from '../hooks/todo'
+import {
+  addItem,
+  editSummary,
+  label,
+  parse,
+  problems,
+  renameItem,
+  setStatus,
+  summarize,
+} from '../hooks/todo'
 
 const ROOT = '/project'
 
@@ -292,9 +301,9 @@ test('edits the title of the selected item from the pane', async ($, on) => {
   await start($)
   const pane = await $.ui.mount(PANE)
 
-  expect(await pane.find({ key: 'edit' })).toBeUndefined()
+  expect(await pane.find({ key: 'title' })).toBeUndefined()
   await pane.press({ key: 'item-4' })
-  await pane.press({ key: 'edit' })
+  await pane.press({ key: 'title' })
 
   expect((await pane.find({ key: 'edit-item' }))?.props.value).toBe('Adapt the tests')
   await pane.input({ key: 'edit-item', text: 'Fix the tests' })
@@ -311,11 +320,11 @@ test('leaves the file alone when the title is submitted unchanged', async ($, on
   const pane = await $.ui.mount(PANE)
 
   await pane.press({ key: 'item-4' })
-  await pane.press({ key: 'edit' })
+  await pane.press({ key: 'title' })
   await pane.input({ key: 'edit-item', text: 'Adapt the tests' })
 
   expect(files['nuxt.md'].mtimeMs).toBe(1)
-  expect(await pane.find({ key: 'edit' })).toBeDefined()
+  expect(await pane.find({ key: 'title' })).toBeDefined()
 })
 
 test('says in the pane when the list changed before a write', async ($, on) => {
@@ -347,6 +356,40 @@ test('closes itself after two idle minutes, but never while a field is open', as
 
   await clock.advance(75 * 1000)
   expect(open).toBe(false)
+})
+
+test('replaces, removes or splits one summary line and keeps its indent', async () => {
+  const [done, , last] = parse(LIST).items
+  const nested = '  - [ ] an indented line is part of the summary'
+
+  expect(editSummary(LIST, done!, 0, 'Router switched.')).toBe(
+    LIST.replace('  Summary of what was done.', '  Router switched.'),
+  )
+  expect(editSummary(LIST, done!, 0, '')).toBe(LIST.replace('  Summary of what was done.\n', ''))
+  expect(editSummary(LIST, done!, 0, 'One\nTwo')).toBe(
+    LIST.replace('  Summary of what was done.', '  One\n  Two'),
+  )
+  expect(editSummary(LIST, last!, 0, 'nested')).toBe(LIST.replace(nested, '  nested'))
+  expect(editSummary(LIST.replace('was done', 'changed'), done!, 0, 'x')).toBeNull()
+  expect(editSummary(LIST, done!, 5, 'x')).toBeNull()
+})
+
+test('edits a summary line in place from the pane', async ($, on) => {
+  const files = { 'nuxt.md': { text: LIST, mtimeMs: 1 } }
+  engine(on, files)
+  await start($)
+  const pane = await $.ui.mount(PANE)
+
+  await pane.press({ key: 'item-2' })
+  await pane.press({ key: 'summary-0' })
+  expect((await pane.find({ key: 'summary-line' }))?.props.value).toBe('Summary of what was done.')
+  expect(await pane.find({ key: 'done' })).toBeUndefined()
+
+  await pane.input({ key: 'summary-line', text: 'Router switched, guards too.' })
+
+  expect(files['nuxt.md'].text).toContain('  Router switched, guards too.\n')
+  expect(await pane.find({ text: 'Router switched, guards too.' })).toBeDefined()
+  expect(await pane.find({ key: 'summary-line' })).toBeUndefined()
 })
 
 test('says so when there is no list', async ($, on) => {

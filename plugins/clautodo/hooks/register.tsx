@@ -3,15 +3,28 @@ import type { EngineInterface, Register, ToolCallResult } from 'claude-code'
 
 import type { Item, Mode, Status, TodoList } from '../types'
 import { DISABLED, RULES } from './rules'
-import { addItem, label, parse, problems, renameItem, setStatus, summarize } from './todo'
+import {
+  addItem,
+  editSummary,
+  label,
+  parse,
+  problems,
+  renameItem,
+  setStatus,
+  summarize,
+} from './todo'
 
 const list = atom({ plugin: 'clautodo', key: 'list' } as const, null)
 const selected = atom({ plugin: 'clautodo', key: 'selected' } as const, null)
 const mode = atom({ plugin: 'clautodo', key: 'mode' } as const, 'view')
 // Shown in the pane, where a toast would wait until it closes.
 const notice = atom({ plugin: 'clautodo', key: 'notice' } as const, null)
+// The summary line being edited, by its index in the selected item's summary.
+const line = atom({ plugin: 'clautodo', key: 'line' } as const, null)
 
 const PANE = 'clautodo'
+
+const PANE_OPEN = { id: PANE, title: 'Todo', focus: true, closeOnEscape: true } as const
 
 const POLL_MS = 2000
 
@@ -137,7 +150,45 @@ const rename = async ($: EngineInterface, path: string, item: Item, entry: strin
   await update($, mode, () => 'view')
 }
 
-const FIELD: Record<Exclude<Mode, 'view'>, string> = { add: 'new-item', edit: 'edit-item' }
+// An unchanged line just closes the field, an empty one removes it.
+const changeLine = async (
+  $: EngineInterface,
+  path: string,
+  item: Item,
+  index: number,
+  entry: string,
+) => {
+  await touch($)
+  if (entry.trim() !== item.summary[index]) {
+    await rewrite($, path, (text) => editSummary(text, item, index, entry))
+  }
+  await update($, mode, () => 'view')
+}
+
+const FIELD: Record<Exclude<Mode, 'view'>, string> = {
+  add: 'new-item',
+  edit: 'edit-item',
+  line: 'summary-line',
+}
+
+const openLine = async ($: EngineInterface, index: number) => {
+  await update($, line, () => index)
+  await openField($, 'line')
+}
+
+// The element a cancelled field hands the ring back to.
+const returnTo = async ($: EngineInterface, field: Exclude<Mode, 'view'>) => {
+  const index = await read($, selected)
+  const item = index === null ? undefined : (await read($, list))?.items[index]
+  if (field === 'line') return `summary-${await read($, line)}`
+  return field === 'edit' && item ? 'title' : 'add'
+}
+
+// Escape handed the keys back to the prompt: opening the pane again takes them back.
+const refocus = async ($: EngineInterface, key: string) => {
+  await $.ui.open(PANE_OPEN)
+  await $.ui.focus({ requestId: PANE, key }).catch(() => undefined)
+}
 
 const openField = async ($: EngineInterface, next: Exclude<Mode, 'view'>) => {
   await touch($)
@@ -161,9 +212,19 @@ export const register: Register = (on) => {
     await update($, mode, () => 'view')
     await update($, notice, () => null)
     await touch($)
-    await $.ui.open({ id: PANE, title: 'Todo', focus: true, closeOnEscape: true })
+    await $.ui.open(PANE_OPEN)
     return {}
   })
+
+  // Escape with a field open cancels the field and keeps the pane; the next one closes it.
+  on('ui.close', { id: PANE }, async ($, e, next) => {
+    const field = await read($, mode)
+    if (e.origin.kind !== 'person' || field === 'view') return next(e)
+    await touch($)
+    await update($, mode, () => 'view')
+    await refocus($, await returnTo($, field))
+    return { value: undefined }
+  }).catch(pass)
 
   on('prompt.compose', async ($, e, next) => {
     const { sections } = await next(e)
@@ -210,7 +271,8 @@ export const register: Register = (on) => {
     const warning = await read($, notice)
     const isAdding = shown === 'add'
     const isEditing = shown === 'edit' && item !== undefined
-    const hasField = (isAdding || isEditing) && Input !== undefined
+    const lineIndex = shown === 'line' ? await read($, line) : null
+    const hasField = (isAdding || isEditing || lineIndex !== null) && Input !== undefined
 
     return (
       <Box flexDirection="column" gap={1}>
@@ -244,21 +306,42 @@ export const register: Register = (on) => {
             autoFocus
             onSubmit={(value: string) => add($, path, items.length, value)}
           />
-        ) : isEditing && Input ? (
-          <Input
-            key="edit-item"
-            label="Title"
-            value={item.title}
-            placeholder="More lines are added to the summary, empty to cancel"
-            autoFocus
-            onSubmit={(value: string) => rename($, path, item, value)}
-          />
         ) : item ? (
           <Box flexDirection="column" gap={1}>
             <Box flexDirection="column" borderStyle="round" paddingX={1}>
-              <Text bold>{item.title}</Text>
+              {isEditing && Input ? (
+                <Input
+                  key="edit-item"
+                  value={item.title}
+                  placeholder="More lines are added to the summary, empty to cancel"
+                  autoFocus
+                  onSubmit={(value: string) => rename($, path, item, value)}
+                />
+              ) : Input ? (
+                <Button key="title" plain onPress={() => openField($, 'edit')}>
+                  <Text bold>{item.title}</Text>
+                </Button>
+              ) : (
+                <Text bold>{item.title}</Text>
+              )}
               {item.summary.length > 0 ? (
-                item.summary.map((line) => <Text dimColor>{line}</Text>)
+                item.summary.map((text, j) =>
+                  j === lineIndex && Input ? (
+                    <Input
+                      key="summary-line"
+                      value={text}
+                      placeholder="Empty removes the line, more lines are added below"
+                      autoFocus
+                      onSubmit={(value: string) => changeLine($, path, item, j, value)}
+                    />
+                  ) : Input ? (
+                    <Button key={`summary-${j}`} plain onPress={() => openLine($, j)}>
+                      <Text dimColor>{text}</Text>
+                    </Button>
+                  ) : (
+                    <Text dimColor>{text}</Text>
+                  ),
+                )
               ) : (
                 <Text dimColor>No summary.</Text>
               )}
@@ -289,9 +372,6 @@ export const register: Register = (on) => {
                 label="start"
                 onPress={() => changeStatus($, path, item, 'running')}
               />
-            )}
-            {item && Input && (
-              <Button key="edit" hotkey="e" label="edit" onPress={() => openField($, 'edit')} />
             )}
             {Input && (
               <Button key="add" hotkey="a" label="add" onPress={() => openField($, 'add')} />

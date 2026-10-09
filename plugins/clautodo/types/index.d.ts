@@ -5,13 +5,20 @@ export type Item = { title: string; status: Status; summary: string[]; line: num
 
 export type TodoList = { path: string; title?: string; items: Item[] }
 
-// What the pane shows below the list: the selected item, or a field to add or edit one.
-export type Mode = 'view' | 'add' | 'edit'
+// What the pane shows below the list: the selected item, or a field to add an item, edit its
+// title or one line of its summary.
+export type Mode = 'view' | 'add' | 'edit' | 'line'
 
 export type Summary = { done: number; total: number; running?: string }
 
 declare module 'claude-code' {
   interface PluginState {
-    clautodo: { list: TodoList | null; selected: number | null; mode: Mode; notice: string | null }
+    clautodo: {
+      list: TodoList | null
+      selected: number | null
+      mode: Mode
+      notice: string | null
+      line: number | null
+    }
   }
 }
