@@ -79,7 +79,6 @@ export const renameItem = (text: string, item: Item, entry: string): string | nu
   return lines.join('\n')
 }
 
-// Removes an item with its summary; null when the line no longer holds that item.
 export const deleteItem = (text: string, item: Item): string | null => {
   const lines = text.split('\n')
   if (!itemAt(lines, item)) return null

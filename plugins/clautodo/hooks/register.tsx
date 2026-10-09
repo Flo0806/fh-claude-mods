@@ -2,8 +2,11 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, ToolCallResult } from 'claude-code'
 
 import type { Item, Mode, Project, Status, TodoList } from '../types'
+import { disable, formatNote, isTodoFile, pass } from './guards'
 import { moveCommands } from './move'
-import { DISABLED, RULES } from './rules'
+import { drawPane } from './pane'
+import type { Actions } from './pane'
+import { RULES } from './rules'
 import {
   addItem,
   deleteItem,
@@ -11,18 +14,21 @@ import {
   fileName,
   label,
   parse,
-  problems,
   renameItem,
   setStatus,
   summarize,
 } from './todo'
 
+// Everything that takes `$` and every state value lives in this file: the engine follows `$` and
+// reads state references only within the module's own file, never across an import.
+
+type Field = Exclude<Mode, 'view'>
+
 const list = atom({ plugin: 'clautodo', key: 'list' } as const, null)
 const selected = atom({ plugin: 'clautodo', key: 'selected' } as const, null)
 const mode = atom({ plugin: 'clautodo', key: 'mode' } as const, 'view')
-// Shown in the pane, where a toast would wait until it closes.
+// Shown in the pane, where a toast would wait until the pane closes.
 const notice = atom({ plugin: 'clautodo', key: 'notice' } as const, null)
-// The summary line being edited, by its index in the selected item's summary.
 const line = atom({ plugin: 'clautodo', key: 'line' } as const, null)
 const pending = atom({ plugin: 'clautodo', key: 'pending' } as const, null)
 const projects = atom({ plugin: 'clautodo', key: 'projects' } as const, null)
@@ -33,55 +39,24 @@ const PANE_OPEN = { id: PANE, title: 'Todo', focus: true, closeOnEscape: true } 
 
 const POLL_MS = 2000
 
-// The pane closes by itself after this long without a press or an open field.
 const IDLE_MS = 2 * 60 * 1000
 
 const IDLE_CHECK_MS = 15 * 1000
 
-const TODO_FILE = /(^|\/)\.todo\/[^/]+\.md$/
-
-const GLYPH: Record<Status, string> = { open: '○', running: '◐', done: '●' }
-
-const COLOR: Record<Status, string | undefined> = {
-  open: undefined,
-  running: 'warning',
-  done: 'success',
-}
-
-// Tells the model right after its edit when it left a todo line the mod cannot read.
-const checkFormat = async (
-  $: EngineInterface,
-  path: string,
-  ran: ToolCallResult,
-): Promise<ToolCallResult> => {
-  if (!TODO_FILE.test(path) || ran.deny !== undefined || ran.isError) return ran
-
-  const found = problems(String(await $.fs.read(path).catch(() => '')))
-  if (found.length === 0) return ran
-
-  const note = `clautodo: ${path} has lines that are not valid todo items (use \`- [ ]\`, \`- [~]\` or \`- [x]\`):\n${found.join('\n')}`
-  return { ...ran, context: [...(ran.context ?? []), note] }
-}
-
-// Subagents and teammates keep the built-in list, a team coordinates over it.
-function disable<E extends { agentId?: string }, R>(_$: unknown, e: E, next: (e: E) => R) {
-  return e.agentId === undefined ? { deny: DISABLED } : next(e)
-}
-
-// A failing hook lets the call through rather than blocking the session.
-function pass<E, R>(_$: unknown, e: E, next: (e: E) => R) {
-  return next(e)
-}
-
 const ACTIVE = '.active'
 
-// The name in .todo/.active and the mtime it was read at, so a poll reads it only after a change.
+const todoDir = async ($: EngineInterface) => `${await $.session.root()}/.todo`
+
+const isList = (entry: { kind: string; name: string }) =>
+  entry.kind === 'file' && entry.name.endsWith('.md')
+
+// The name in .active and the mtime it was read at, so a poll reads it again only after a change.
 let pointer = { mtimeMs: -1, name: '' }
 
-// The list named in .todo/.active, or the most recently changed one without a valid name there.
+// The list named in .active, or the most recently changed one when that names none.
 const activeList = async ($: EngineInterface, dir: string) => {
   const entries = await $.fs.list(dir).catch(() => [])
-  const lists = entries.filter((entry) => entry.kind === 'file' && entry.name.endsWith('.md'))
+  const lists = entries.filter(isList)
   const marker = entries.find((entry) => entry.kind === 'file' && entry.name === ACTIVE)
 
   if (marker && marker.mtimeMs !== pointer.mtimeMs) {
@@ -92,93 +67,7 @@ const activeList = async ($: EngineInterface, dir: string) => {
   return named ?? lists.toSorted((a, b) => b.mtimeMs - a.mtimeMs)[0]
 }
 
-const todoDir = async ($: EngineInterface) => `${await $.session.root()}/.todo`
-
-const readProjects = async ($: EngineInterface): Promise<Project[]> => {
-  const dir = await todoDir($)
-  const entries = await $.fs.list(dir).catch(() => [])
-  const names = entries
-    .filter((entry) => entry.kind === 'file' && entry.name.endsWith('.md'))
-    .map((entry) => entry.name)
-    .toSorted()
-
-  return Promise.all(
-    names.map(async (name) => {
-      const { title, items } = parse(String(await $.fs.read(`${dir}/${name}`).catch(() => '')))
-      const done = items.filter((item) => item.status === 'done').length
-      return { name, title, done, total: items.length }
-    }),
-  )
-}
-
-const toggleProjects = async ($: EngineInterface) => {
-  await touch($)
-  await update($, notice, () => null)
-  const isOpen = (await read($, projects)) !== null
-  const next = isOpen ? null : await readProjects($)
-  await update($, projects, () => next)
-}
-
-// Starts a list with the title as its heading and makes it the active one; an empty title just
-// closes the field.
-const create = async ($: EngineInterface, title: string) => {
-  await touch($)
-  await update($, mode, () => 'view')
-  const trimmed = title.trim()
-  if (trimmed === '') return
-
-  const name = fileName(trimmed)
-  const path = `${await todoDir($)}/${name}`
-  if (await $.fs.exists(path)) {
-    await update($, notice, () => `${name} exists already.`)
-    return
-  }
-  await $.fs.write(path, `# ${trimmed}\n\n`)
-  await activate($, name)
-}
-
-// The first press asks, the second moves the active list to .todo/archive/ and clears .active.
-const archive = async ($: EngineInterface, name: string) => {
-  const isConfirmed = (await read($, pending)) === 'archive'
-  await touch($)
-  if (!isConfirmed) {
-    await update($, pending, () => 'archive')
-    return
-  }
-
-  const root = await $.session.root()
-  const target = `.todo/archive/${name}`
-  if (await $.fs.exists(`${root}/${target}`)) {
-    await update($, notice, () => `${target} exists already.`)
-    return
-  }
-
-  for (const argv of moveCommands(root, `.todo/${name}`, target, '.todo/archive')) {
-    const { exitCode, stderr } = await $.process.run(argv, { cwd: root })
-    if (exitCode !== 0) {
-      await update($, notice, () => `Could not archive ${name}: ${stderr.trim() || exitCode}`)
-      return
-    }
-  }
-
-  await $.fs.write(`${root}/.todo/${ACTIVE}`, '')
-  pointer = { mtimeMs: -1, name: '' }
-  await load($, true)
-  const left = await readProjects($)
-  await update($, projects, () => left)
-}
-
-// Writes .todo/.active and shows that list's items.
-const activate = async ($: EngineInterface, name: string) => {
-  await touch($)
-  await $.fs.write(`${await todoDir($)}/${ACTIVE}`, `${name}\n`)
-  pointer = { mtimeMs: -1, name }
-  await update($, projects, () => null)
-  await update($, selected, () => null)
-  await load($, true)
-}
-
-// Name and mtime of the list last read, so a poll reads the file only after it changed.
+// Name and mtime of the list last read, so a poll reads it again only after a change.
 let seen = ''
 
 const load = async ($: EngineInterface, force = false) => {
@@ -194,26 +83,64 @@ const load = async ($: EngineInterface, force = false) => {
   await update($, list, () => latest)
 }
 
-// When the person last did something in the pane.
+// An empty name hands the choice back to the newest list.
+const setActive = async ($: EngineInterface, name: string) => {
+  await $.fs.write(`${await todoDir($)}/${ACTIVE}`, name ? `${name}\n` : '')
+  pointer = { mtimeMs: -1, name }
+  await load($, true)
+}
+
+const readProjects = async ($: EngineInterface): Promise<Project[]> => {
+  const dir = await todoDir($)
+  const entries = await $.fs.list(dir).catch(() => [])
+  const names = entries
+    .filter(isList)
+    .map((entry) => entry.name)
+    .toSorted()
+
+  return Promise.all(
+    names.map(async (name) => {
+      const { title, items } = parse(String(await $.fs.read(`${dir}/${name}`).catch(() => '')))
+      const done = items.filter((item) => item.status === 'done').length
+      return { name, title, done, total: items.length }
+    }),
+  )
+}
+
+const checkFormat = async (
+  $: EngineInterface,
+  path: string,
+  ran: ToolCallResult,
+): Promise<ToolCallResult> => {
+  if (!isTodoFile(path) || ran.deny !== undefined || ran.isError) return ran
+
+  const note = formatNote(path, String(await $.fs.read(path).catch(() => '')))
+  return note ? { ...ran, context: [...(ran.context ?? []), note] } : ran
+}
+
 let lastActivity = 0
 
-// Any action but the second press drops what waits for it.
+// Every action counts as activity, and any action but the second press drops what waits for it.
 const touch = async ($: EngineInterface) => {
   lastActivity = await $.clock.now()
   await update($, pending, () => null)
 }
 
-const select = async ($: EngineInterface, index: number) => {
-  await touch($)
-  await update($, notice, () => null)
-  await update($, selected, (current) => (current === index ? null : index))
-}
-
-// An open field counts as activity, so typing is never cut off.
+// Never while a field is open, so typing is not cut off.
 const closeWhenIdle = async ($: EngineInterface) => {
   const isOpen = (await $.ui.panes()).some((pane) => pane.id === PANE)
   const isIdle = (await $.clock.now()) - lastActivity >= IDLE_MS
   if (isOpen && isIdle && (await read($, mode)) === 'view') await $.ui.close({ id: PANE })
+}
+
+const openPane = async ($: EngineInterface) => {
+  await touch($)
+  await load($, true)
+  await update($, selected, () => null)
+  await update($, mode, () => 'view')
+  await update($, notice, () => null)
+  await update($, projects, () => null)
+  await $.ui.open(PANE_OPEN)
 }
 
 // Reads the file again before writing, so an edit made meanwhile is kept.
@@ -231,33 +158,37 @@ const rewrite = async (
   await load($, true)
 }
 
-// The first press asks, the second deletes the item with its summary.
-const remove = async ($: EngineInterface, path: string, item: Item) => {
-  const isConfirmed = (await read($, pending)) === 'delete'
+// True on the second press of the same action, else marks it as waiting.
+const confirmed = async ($: EngineInterface, action: 'delete' | 'archive') => {
+  const isSecond = (await read($, pending)) === action
   await touch($)
-  if (!isConfirmed) {
-    await update($, pending, () => 'delete')
-    return
-  }
+  if (!isSecond) await update($, pending, () => action)
+  return isSecond
+}
+
+const select = async ($: EngineInterface, index: number) => {
+  await touch($)
+  await update($, notice, () => null)
+  await update($, selected, (current) => (current === index ? null : index))
+}
+
+const remove = async ($: EngineInterface, path: string, item: Item) => {
+  if (!(await confirmed($, 'delete'))) return
   await rewrite($, path, (text) => deleteItem(text, item))
   await update($, selected, () => null)
 }
 
-const changeStatus = ($: EngineInterface, path: string, item: Item, status: Status) =>
-  rewrite($, path, (text) => setStatus(text, item, status))
+// The field handlers below close their field; an empty or unchanged entry changes nothing.
 
-// An empty title just closes the field.
-const add = async ($: EngineInterface, path: string, count: number, title: string) => {
+const add = async ($: EngineInterface, path: string, count: number, entry: string) => {
   await touch($)
-  const trimmed = title.trim()
-  if (trimmed !== '') {
-    await rewrite($, path, (text) => addItem(text, trimmed))
+  if (entry.trim() !== '') {
+    await rewrite($, path, (text) => addItem(text, entry))
     await update($, selected, () => count)
   }
   await update($, mode, () => 'view')
 }
 
-// An empty or unchanged title just closes the field.
 const rename = async ($: EngineInterface, path: string, item: Item, entry: string) => {
   await touch($)
   if (entry.trim() !== '' && entry.trim() !== item.title) {
@@ -266,7 +197,7 @@ const rename = async ($: EngineInterface, path: string, item: Item, entry: strin
   await update($, mode, () => 'view')
 }
 
-// An unchanged line just closes the field, an empty one removes it.
+// Unlike a title, an emptied summary line is removed.
 const changeLine = async (
   $: EngineInterface,
   path: string,
@@ -281,11 +212,73 @@ const changeLine = async (
   await update($, mode, () => 'view')
 }
 
-const FIELD: Record<Exclude<Mode, 'view'>, string> = {
+const create = async ($: EngineInterface, title: string) => {
+  await touch($)
+  await update($, mode, () => 'view')
+  const trimmed = title.trim()
+  if (trimmed === '') return
+
+  const name = fileName(trimmed)
+  const path = `${await todoDir($)}/${name}`
+  if (await $.fs.exists(path)) {
+    await update($, notice, () => `${name} exists already.`)
+    return
+  }
+  await $.fs.write(path, `# ${trimmed}\n\n`)
+  await activate($, name)
+}
+
+const activate = async ($: EngineInterface, name: string) => {
+  await touch($)
+  await update($, projects, () => null)
+  await update($, selected, () => null)
+  await setActive($, name)
+}
+
+// Moves the active list to .todo/archive/; the newest list left becomes the active one.
+const archive = async ($: EngineInterface, name: string) => {
+  if (!(await confirmed($, 'archive'))) return
+
+  const root = await $.session.root()
+  const target = `.todo/archive/${name}`
+  if (await $.fs.exists(`${root}/${target}`)) {
+    await update($, notice, () => `${target} exists already.`)
+    return
+  }
+
+  for (const argv of moveCommands(root, `.todo/${name}`, target, '.todo/archive')) {
+    const { exitCode, stderr } = await $.process.run(argv, { cwd: root })
+    if (exitCode !== 0) {
+      await update($, notice, () => `Could not archive ${name}: ${stderr.trim() || exitCode}`)
+      return
+    }
+  }
+
+  await setActive($, '')
+  const left = await readProjects($)
+  await update($, projects, () => left)
+}
+
+const toggleProjects = async ($: EngineInterface) => {
+  await touch($)
+  await update($, notice, () => null)
+  const isOpen = (await read($, projects)) !== null
+  const next = isOpen ? null : await readProjects($)
+  await update($, projects, () => next)
+}
+
+const FIELD: Record<Field, string> = {
   add: 'new-item',
   edit: 'edit-item',
   line: 'summary-line',
   project: 'new-project',
+}
+
+const openField = async ($: EngineInterface, field: Field) => {
+  await touch($)
+  await update($, mode, () => field)
+  // Moving the ring is a convenience: without it the field still takes a click or Tab.
+  await $.ui.focus({ requestId: PANE, key: FIELD[field] }).catch(() => undefined)
 }
 
 const openLine = async ($: EngineInterface, index: number) => {
@@ -294,11 +287,11 @@ const openLine = async ($: EngineInterface, index: number) => {
 }
 
 // The element a cancelled field hands the ring back to.
-const returnTo = async ($: EngineInterface, field: Exclude<Mode, 'view'>) => {
-  const index = await read($, selected)
-  const item = index === null ? undefined : (await read($, list))?.items[index]
+const returnTo = async ($: EngineInterface, field: Field) => {
   if (field === 'line') return `summary-${await read($, line)}`
   if (field === 'project') return 'new'
+  const index = await read($, selected)
+  const item = index === null ? undefined : (await read($, list))?.items[index]
   return field === 'edit' && item ? 'title' : 'add'
 }
 
@@ -308,12 +301,44 @@ const refocus = async ($: EngineInterface, key: string) => {
   await $.ui.focus({ requestId: PANE, key }).catch(() => undefined)
 }
 
-const openField = async ($: EngineInterface, next: Exclude<Mode, 'view'>) => {
-  await touch($)
-  await update($, mode, () => next)
-  // Moving the ring is a convenience: without it the field still takes a click or Tab.
-  await $.ui.focus({ requestId: PANE, key: FIELD[next] }).catch(() => undefined)
+// Escape leaves an open field, then a pending second press, then the projects; false when there is
+// nothing left to leave and the pane should close.
+const stepBack = async ($: EngineInterface) => {
+  const field = await read($, mode)
+  const waiting = await read($, pending)
+
+  if (field !== 'view') {
+    await touch($)
+    await update($, mode, () => 'view')
+    await refocus($, await returnTo($, field))
+  } else if (waiting !== null) {
+    await touch($)
+    await refocus($, waiting)
+  } else if ((await read($, projects)) !== null) {
+    await toggleProjects($)
+    await refocus($, 'projects')
+  } else {
+    return false
+  }
+  return true
 }
+
+// The pane's buttons and fields bound to this session; `path` and `count` are the drawn list's.
+const actionsFor = ($: EngineInterface, path: string, count: number): Actions => ({
+  select: (index) => select($, index),
+  changeStatus: (item: Item, status: Status) =>
+    rewrite($, path, (text) => setStatus(text, item, status)),
+  remove: (item) => remove($, path, item),
+  add: (entry) => add($, path, count, entry),
+  rename: (item, entry) => rename($, path, item, entry),
+  changeLine: (item, index, entry) => changeLine($, path, item, index, entry),
+  openField: (field) => openField($, field),
+  openLine: (index) => openLine($, index),
+  toggleProjects: () => toggleProjects($),
+  activate: (name) => activate($, name),
+  create: (title) => create($, title),
+  archive: (name) => archive($, name),
+})
 
 export const register: Register = (on) => {
   on('session.start', async ($, e, next) => {
@@ -325,38 +350,39 @@ export const register: Register = (on) => {
   })
 
   on('command.run', { command: 'todo' }, async ($) => {
-    await load($, true)
-    await update($, selected, () => null)
-    await update($, mode, () => 'view')
-    await update($, notice, () => null)
-    await update($, projects, () => null)
-    await touch($)
-    await $.ui.open(PANE_OPEN)
+    await openPane($)
     return {}
   })
 
-  // Escape steps back one level: an open field, then a pending second press, then the projects;
-  // only after that it closes the pane.
-  on('ui.close', { id: PANE }, async ($, e, next) => {
-    if (e.origin.kind !== 'person') return next(e)
-    const field = await read($, mode)
-    const waiting = await read($, pending)
+  on('ui.close', { id: PANE }, async ($, e, next) =>
+    e.origin.kind === 'person' && (await stepBack($)) ? { value: undefined } : next(e),
+  ).catch(pass)
 
-    if (field !== 'view') {
-      await touch($)
-      await update($, mode, () => 'view')
-      await refocus($, await returnTo($, field))
-    } else if (waiting !== null) {
-      await touch($)
-      await refocus($, waiting)
-    } else if ((await read($, projects)) !== null) {
-      await toggleProjects($)
-      await refocus($, 'projects')
-    } else {
-      return next(e)
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    const todos = await read($, list)
+    const view = {
+      todos,
+      projects: await read($, projects),
+      selected: await read($, selected),
+      mode: await read($, mode),
+      line: await read($, line),
+      pending: await read($, pending),
+      notice: await read($, notice),
     }
-    return { value: undefined }
-  }).catch(pass)
+    return drawPane(
+      $.ui.resolve(e),
+      view,
+      actionsFor($, todos?.path ?? '', todos?.items.length ?? 0),
+    )
+  })
+
+  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
+    const current = summarize((await read($, list))?.items ?? [])
+    if (current === null) return next(e)
+
+    const tail = e.props.tail ? `${e.props.tail}  ${label(current)}` : label(current)
+    return next({ ...e, props: { ...e.props, tail } })
+  })
 
   on('prompt.compose', async ($, e, next) => {
     const { sections } = await next(e)
@@ -375,242 +401,4 @@ export const register: Register = (on) => {
   on('tool.call', { tool: 'Write' }, async ($, e, next) =>
     checkFormat($, e.file_path, await next(e)),
   ).catch(pass)
-
-  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
-    const current = summarize((await read($, list))?.items ?? [])
-    if (current === null) return next(e)
-
-    const tail = e.props.tail ? `${e.props.tail}  ${label(current)}` : label(current)
-    return next({ ...e, props: { ...e.props, tail } })
-  })
-
-  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const elements = $.ui.resolve(e)
-    const { Box, Button, Text } = elements
-    // Mobile has no text field, so it cannot add items.
-    const Input = 'Input' in elements ? elements.Input : undefined
-    const todos = await read($, list)
-    const shownProjects = await read($, projects)
-    const switchButton = (
-      <Button
-        key="projects"
-        plain
-        hotkey="p"
-        label={shownProjects ? 'items' : 'projects'}
-        onPress={() => toggleProjects($)}
-      />
-    )
-
-    const shown = await read($, mode)
-
-    if (shownProjects) {
-      const active = todos?.path.split('/').pop()
-      const isArchiving = (await read($, pending)) === 'archive' && active !== undefined
-      const warning = isArchiving
-        ? `Archive "${todos?.title ?? active}"? Press c again.`
-        : await read($, notice)
-      return (
-        <Box flexDirection="column" gap={1}>
-          <Text bold>Projects</Text>
-          <Box flexDirection="column">
-            {shownProjects.length === 0 && <Text dimColor>No lists in .todo/ yet.</Text>}
-            {shownProjects.map((project, i) => (
-              <Button
-                key={`project-${project.name}`}
-                plain
-                hotkey={i < 9 ? String(i + 1) : undefined}
-                onPress={() => activate($, project.name)}
-              >
-                <Text
-                  bold={project.name === active}
-                  color={project.name === active ? 'claude' : undefined}
-                >
-                  {project.title ?? project.name}
-                </Text>{' '}
-                <Text dimColor>
-                  {project.done}/{project.total}
-                </Text>
-              </Button>
-            ))}
-          </Box>
-          {shown === 'project' && Input ? (
-            <Input
-              key="new-project"
-              label="New project"
-              placeholder="Title, Enter to create, empty to cancel"
-              autoFocus
-              onSubmit={(value: string) => create($, value)}
-            />
-          ) : (
-            <Box flexDirection="column" gap={1}>
-              {warning && <Text color="warning">{warning}</Text>}
-              <Box gap={2}>
-                {switchButton}
-                {Input && (
-                  <Button
-                    key="new"
-                    plain
-                    hotkey="n"
-                    label="new"
-                    onPress={() => openField($, 'project')}
-                  />
-                )}
-                {active && (
-                  <Button
-                    key="archive"
-                    plain
-                    hotkey="c"
-                    label={isArchiving ? 'confirm' : 'archive'}
-                    onPress={() => archive($, active)}
-                  />
-                )}
-              </Box>
-            </Box>
-          )}
-        </Box>
-      )
-    }
-
-    if (todos === null) {
-      return (
-        <Box flexDirection="column" gap={1}>
-          <Text dimColor>No todo list in .todo/ yet.</Text>
-          <Box gap={2}>{switchButton}</Box>
-        </Box>
-      )
-    }
-
-    const { path, title, items } = todos
-    const chosen = await read($, selected)
-    const index = chosen !== null && chosen < items.length ? chosen : null
-    const item = index === null ? undefined : items[index]
-    const isAsking = (await read($, pending)) === 'delete' && item !== undefined
-    const warning = isAsking
-      ? `Delete "${item.title}" and its summary? Press d again.`
-      : await read($, notice)
-    const isAdding = shown === 'add'
-    const isEditing = shown === 'edit' && item !== undefined
-    const lineIndex = shown === 'line' ? await read($, line) : null
-    const hasField = (isAdding || isEditing || lineIndex !== null) && Input !== undefined
-
-    return (
-      <Box flexDirection="column" gap={1}>
-        <Text bold>{title ?? path.split('/').pop()}</Text>
-
-        <Box flexDirection="column">
-          {items.length === 0 && <Text dimColor>No items yet.</Text>}
-          {items.map((one, i) => (
-            <Button
-              key={`item-${one.line}`}
-              plain
-              hotkey={i < 9 ? String(i + 1) : undefined}
-              onPress={() => select($, i)}
-            >
-              <Text color={COLOR[one.status]}>{GLYPH[one.status]}</Text>{' '}
-              <Text
-                bold={i === index}
-                color={i === index ? 'claude' : undefined}
-                dimColor={one.status === 'done' && i !== index}
-              >
-                {one.title}
-              </Text>
-            </Button>
-          ))}
-        </Box>
-
-        {isAdding && Input ? (
-          <Input
-            key="new-item"
-            label="New item"
-            placeholder="Title, Enter to add, empty to cancel"
-            autoFocus
-            onSubmit={(value: string) => add($, path, items.length, value)}
-          />
-        ) : item ? (
-          <Box flexDirection="column" gap={1}>
-            <Box flexDirection="column" borderStyle="round" paddingX={1}>
-              {isEditing && Input ? (
-                <Input
-                  key="edit-item"
-                  value={item.title}
-                  placeholder="More lines are added to the summary, empty to cancel"
-                  autoFocus
-                  onSubmit={(value: string) => rename($, path, item, value)}
-                />
-              ) : Input ? (
-                <Button key="title" plain onPress={() => openField($, 'edit')}>
-                  <Text bold>{item.title}</Text>
-                </Button>
-              ) : (
-                <Text bold>{item.title}</Text>
-              )}
-              {item.summary.length > 0 ? (
-                item.summary.map((text, j) =>
-                  j === lineIndex && Input ? (
-                    <Input
-                      key="summary-line"
-                      value={text}
-                      placeholder="Empty removes the line, more lines are added below"
-                      autoFocus
-                      onSubmit={(value: string) => changeLine($, path, item, j, value)}
-                    />
-                  ) : Input ? (
-                    <Button key={`summary-${j}`} plain onPress={() => openLine($, j)}>
-                      <Text dimColor>{text}</Text>
-                    </Button>
-                  ) : (
-                    <Text dimColor>{text}</Text>
-                  ),
-                )
-              ) : (
-                <Text dimColor>No summary.</Text>
-              )}
-            </Box>
-          </Box>
-        ) : (
-          items.length > 0 && <Text dimColor>Select an item: 1-9 or Enter</Text>
-        )}
-
-        {warning && <Text color="warning">{warning}</Text>}
-
-        {!hasField && (
-          <Box gap={2}>
-            {item && (
-              <Button
-                key="done"
-                plain
-                hotkey="x"
-                label={item.status === 'done' ? 'reopen' : 'done'}
-                onPress={() =>
-                  changeStatus($, path, item, item.status === 'done' ? 'open' : 'done')
-                }
-              />
-            )}
-            {item && item.status !== 'running' && (
-              <Button
-                key="start"
-                plain
-                hotkey="s"
-                label="start"
-                onPress={() => changeStatus($, path, item, 'running')}
-              />
-            )}
-            {Input && (
-              <Button key="add" plain hotkey="a" label="add" onPress={() => openField($, 'add')} />
-            )}
-            {switchButton}
-            {item && (
-              <Button
-                key="delete"
-                plain
-                hotkey="d"
-                label={isAsking ? 'confirm' : 'delete'}
-                onPress={() => remove($, path, item)}
-              />
-            )}
-          </Box>
-        )}
-      </Box>
-    )
-  })
 }
