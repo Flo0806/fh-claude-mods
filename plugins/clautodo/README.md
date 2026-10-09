@@ -29,15 +29,16 @@ Only unindented items count; indented lines belong to the item above.
 
 `/todo` opens the list in a pane:
 
-| Key                              | Does                                                         |
-| -------------------------------- | ------------------------------------------------------------ |
-| `1-9`, `Enter`                   | select an item and show its summary, again to deselect       |
-| `x`                              | check the selected item off, or reopen it                    |
-| `s`                              | mark the selected item as running                            |
-| `a`                              | add an item; more lines become its summary                   |
-| `↑ ↓`, `Enter` on the title      | edit the title; more lines are added to its summary          |
-| `↑ ↓`, `Enter` on a summary line | edit that line; empty removes it, more lines are added below |
-| `Esc`                            | cancel an open field, else close                             |
+| Key                              | Does                                                              |
+| -------------------------------- | ----------------------------------------------------------------- |
+| `1-9`, `Enter`                   | select an item and show its summary, again to deselect            |
+| `x`                              | check the selected item off, or reopen it                         |
+| `s`                              | mark the selected item as running                                 |
+| `a`                              | add an item; more lines become its summary                        |
+| `d`                              | delete the selected item with its summary; press again to confirm |
+| `↑ ↓`, `Enter` on the title      | edit the title; more lines are added to its summary               |
+| `↑ ↓`, `Enter` on a summary line | edit that line; empty removes it, more lines are added below      |
+| `Esc`                            | cancel an open field or a pending delete, else close              |
 
 A change is written straight into the file, after reading it again, so an edit made meanwhile is kept.
 

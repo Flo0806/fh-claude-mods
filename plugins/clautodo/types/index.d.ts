@@ -19,6 +19,7 @@ declare module 'claude-code' {
       mode: Mode
       notice: string | null
       line: number | null
+      confirming: boolean
     }
   }
 }

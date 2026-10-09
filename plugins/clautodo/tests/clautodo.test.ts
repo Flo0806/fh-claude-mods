@@ -3,6 +3,7 @@ import { expect, mock, test, type Engine, type Mounted } from 'claude-code/testi
 
 import {
   addItem,
+  deleteItem,
   editSummary,
   label,
   parse,
@@ -390,6 +391,52 @@ test('edits a summary line in place from the pane', async ($, on) => {
   expect(files['nuxt.md'].text).toContain('  Router switched, guards too.\n')
   expect(await pane.find({ text: 'Router switched, guards too.' })).toBeDefined()
   expect(await pane.find({ key: 'summary-line' })).toBeUndefined()
+})
+
+test('deletes an item with its summary and refuses a line that moved', async () => {
+  const [done, , last] = parse(LIST).items
+
+  expect(deleteItem(LIST, done!)).toBe(
+    LIST.replace('- [x] Switch the router\n  Summary of what was done.\n', ''),
+  )
+  expect(deleteItem(LIST, last!)).toBe(LIST.replace(/- \[ \] Update the docs\n.*\n/, ''))
+  expect(deleteItem(`\n${LIST}`, done!)).toBeNull()
+})
+
+test('deletes only on a second press', async ($, on) => {
+  const files = { 'nuxt.md': { text: LIST, mtimeMs: 1 } }
+  engine(on, files)
+  await start($)
+  const pane = await $.ui.mount(PANE)
+
+  await pane.press({ key: 'item-2' })
+  await pane.press({ key: 'delete' })
+
+  expect(files['nuxt.md'].text).toBe(LIST)
+  expect((await pane.find({ key: 'delete' }))?.props.label).toBe('confirm')
+  expect(
+    await pane.find({ text: 'Delete "Switch the router" and its summary? Press d again.' }),
+  ).toBeDefined()
+
+  await pane.press({ key: 'delete' })
+
+  expect(files['nuxt.md'].text).not.toContain('Switch the router')
+  expect(await pane.find({ text: 'Select an item: 1-9 or Enter' })).toBeDefined()
+})
+
+test('drops a pending delete on any other action', async ($, on) => {
+  const files = { 'nuxt.md': { text: LIST, mtimeMs: 1 } }
+  engine(on, files)
+  await start($)
+  const pane = await $.ui.mount(PANE)
+
+  await pane.press({ key: 'item-2' })
+  await pane.press({ key: 'delete' })
+  await pane.press({ key: 'item-4' })
+  await pane.press({ key: 'delete' })
+
+  expect(files['nuxt.md'].text).toBe(LIST)
+  expect((await pane.find({ key: 'delete' }))?.props.label).toBe('confirm')
 })
 
 test('says so when there is no list', async ($, on) => {
