@@ -11,10 +11,10 @@ A Claude Code plugin marketplace with small mods that change Claude Code's own i
 
 ## Install
 
-In a Claude Code session:
+In a Claude Code session, with `<mod>` one of the mods above:
 
 ```
-/plugin install clausage --marketplace Flo0806/fh-claude-mods
+/plugin install <mod> --marketplace Flo0806/fh-claude-mods
 ```
 
 Answer `y` to add the marketplace, then pick a scope.

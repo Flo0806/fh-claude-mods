@@ -1,5 +1,6 @@
 {
   "name": "fh-claude-mods",
+  "description": "Kleine Mods, die die Oberfläche von Claude Code selbst verändern",
   "owner": {
     "name": "Florian Heuberger"
   },
