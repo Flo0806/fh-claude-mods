@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, ToolCallResult } from 'claude-code'
 
 import type { Item, Mode, Project, Status, TodoList } from '../types'
+import { moveCommands } from './move'
 import { DISABLED, RULES } from './rules'
 import {
   addItem,
@@ -23,8 +24,7 @@ const mode = atom({ plugin: 'clautodo', key: 'mode' } as const, 'view')
 const notice = atom({ plugin: 'clautodo', key: 'notice' } as const, null)
 // The summary line being edited, by its index in the selected item's summary.
 const line = atom({ plugin: 'clautodo', key: 'line' } as const, null)
-// Whether the delete button waits for a second press.
-const confirming = atom({ plugin: 'clautodo', key: 'confirming' } as const, false)
+const pending = atom({ plugin: 'clautodo', key: 'pending' } as const, null)
 const projects = atom({ plugin: 'clautodo', key: 'projects' } as const, null)
 
 const PANE = 'clautodo'
@@ -137,6 +137,37 @@ const create = async ($: EngineInterface, title: string) => {
   await activate($, name)
 }
 
+// The first press asks, the second moves the active list to .todo/archive/ and clears .active.
+const archive = async ($: EngineInterface, name: string) => {
+  const isConfirmed = (await read($, pending)) === 'archive'
+  await touch($)
+  if (!isConfirmed) {
+    await update($, pending, () => 'archive')
+    return
+  }
+
+  const root = await $.session.root()
+  const target = `.todo/archive/${name}`
+  if (await $.fs.exists(`${root}/${target}`)) {
+    await update($, notice, () => `${target} exists already.`)
+    return
+  }
+
+  for (const argv of moveCommands(root, `.todo/${name}`, target, '.todo/archive')) {
+    const { exitCode, stderr } = await $.process.run(argv, { cwd: root })
+    if (exitCode !== 0) {
+      await update($, notice, () => `Could not archive ${name}: ${stderr.trim() || exitCode}`)
+      return
+    }
+  }
+
+  await $.fs.write(`${root}/.todo/${ACTIVE}`, '')
+  pointer = { mtimeMs: -1, name: '' }
+  await load($, true)
+  const left = await readProjects($)
+  await update($, projects, () => left)
+}
+
 // Writes .todo/.active and shows that list's items.
 const activate = async ($: EngineInterface, name: string) => {
   await touch($)
@@ -166,10 +197,10 @@ const load = async ($: EngineInterface, force = false) => {
 // When the person last did something in the pane.
 let lastActivity = 0
 
-// Any action but a second delete press drops a pending delete.
+// Any action but the second press drops what waits for it.
 const touch = async ($: EngineInterface) => {
   lastActivity = await $.clock.now()
-  await update($, confirming, () => false)
+  await update($, pending, () => null)
 }
 
 const select = async ($: EngineInterface, index: number) => {
@@ -202,10 +233,10 @@ const rewrite = async (
 
 // The first press asks, the second deletes the item with its summary.
 const remove = async ($: EngineInterface, path: string, item: Item) => {
-  const isConfirmed = await read($, confirming)
+  const isConfirmed = (await read($, pending)) === 'delete'
   await touch($)
   if (!isConfirmed) {
-    await update($, confirming, () => true)
+    await update($, pending, () => 'delete')
     return
   }
   await rewrite($, path, (text) => deleteItem(text, item))
@@ -304,20 +335,26 @@ export const register: Register = (on) => {
     return {}
   })
 
-  // Escape with a field open or a delete pending cancels that and keeps the pane; the next one
-  // closes it.
+  // Escape steps back one level: an open field, then a pending second press, then the projects;
+  // only after that it closes the pane.
   on('ui.close', { id: PANE }, async ($, e, next) => {
+    if (e.origin.kind !== 'person') return next(e)
     const field = await read($, mode)
-    const isAsking = await read($, confirming)
-    if (e.origin.kind === 'person' && field === 'view' && (await read($, projects)) !== null) {
+    const waiting = await read($, pending)
+
+    if (field !== 'view') {
+      await touch($)
+      await update($, mode, () => 'view')
+      await refocus($, await returnTo($, field))
+    } else if (waiting !== null) {
+      await touch($)
+      await refocus($, waiting)
+    } else if ((await read($, projects)) !== null) {
       await toggleProjects($)
       await refocus($, 'projects')
-      return { value: undefined }
+    } else {
+      return next(e)
     }
-    if (e.origin.kind !== 'person' || (field === 'view' && !isAsking)) return next(e)
-    await touch($)
-    await update($, mode, () => 'view')
-    await refocus($, field === 'view' ? 'delete' : await returnTo($, field))
     return { value: undefined }
   }).catch(pass)
 
@@ -357,6 +394,7 @@ export const register: Register = (on) => {
     const switchButton = (
       <Button
         key="projects"
+        plain
         hotkey="p"
         label={shownProjects ? 'items' : 'projects'}
         onPress={() => toggleProjects($)}
@@ -366,8 +404,11 @@ export const register: Register = (on) => {
     const shown = await read($, mode)
 
     if (shownProjects) {
-      const warning = await read($, notice)
       const active = todos?.path.split('/').pop()
+      const isArchiving = (await read($, pending)) === 'archive' && active !== undefined
+      const warning = isArchiving
+        ? `Archive "${todos?.title ?? active}"? Press c again.`
+        : await read($, notice)
       return (
         <Box flexDirection="column" gap={1}>
           <Text bold>Projects</Text>
@@ -408,9 +449,19 @@ export const register: Register = (on) => {
                 {Input && (
                   <Button
                     key="new"
+                    plain
                     hotkey="n"
                     label="new"
                     onPress={() => openField($, 'project')}
+                  />
+                )}
+                {active && (
+                  <Button
+                    key="archive"
+                    plain
+                    hotkey="c"
+                    label={isArchiving ? 'confirm' : 'archive'}
+                    onPress={() => archive($, active)}
                   />
                 )}
               </Box>
@@ -433,7 +484,7 @@ export const register: Register = (on) => {
     const chosen = await read($, selected)
     const index = chosen !== null && chosen < items.length ? chosen : null
     const item = index === null ? undefined : items[index]
-    const isAsking = (await read($, confirming)) && item !== undefined
+    const isAsking = (await read($, pending)) === 'delete' && item !== undefined
     const warning = isAsking
       ? `Delete "${item.title}" and its summary? Press d again.`
       : await read($, notice)
@@ -527,6 +578,7 @@ export const register: Register = (on) => {
             {item && (
               <Button
                 key="done"
+                plain
                 hotkey="x"
                 label={item.status === 'done' ? 'reopen' : 'done'}
                 onPress={() =>
@@ -537,18 +589,20 @@ export const register: Register = (on) => {
             {item && item.status !== 'running' && (
               <Button
                 key="start"
+                plain
                 hotkey="s"
                 label="start"
                 onPress={() => changeStatus($, path, item, 'running')}
               />
             )}
             {Input && (
-              <Button key="add" hotkey="a" label="add" onPress={() => openField($, 'add')} />
+              <Button key="add" plain hotkey="a" label="add" onPress={() => openField($, 'add')} />
             )}
             {switchButton}
             {item && (
               <Button
                 key="delete"
+                plain
                 hotkey="d"
                 label={isAsking ? 'confirm' : 'delete'}
                 onPress={() => remove($, path, item)}

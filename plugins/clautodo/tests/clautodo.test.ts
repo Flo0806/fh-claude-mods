@@ -13,6 +13,7 @@ import {
   setStatus,
   summarize,
 } from '../hooks/todo'
+import { moveCommands } from '../hooks/move'
 
 const ROOT = '/project'
 
@@ -43,23 +44,43 @@ const file = (name: string, mtimeMs: number): FsEntry => ({
 // Whether the engine holds the pane open; ui.close clears it.
 let open = true
 
+// The commands the mod ran, and whether they fail.
+let runs: (readonly string[])[] = []
+let failing = false
+
 const PANE_ROW = { id: 'clautodo', title: 'Todo', isShown: true, isFocused: true, isPlaced: true }
 
 // The engine beneath the mod, with a .todo folder held in memory.
 const engine = (on: On, files: Record<string, { text: string; mtimeMs: number }>) => {
   open = true
+  runs = []
+  failing = false
   const clock = mock.clock(on, { now: 0 })
   on('session.start', () => ({ cwd: ROOT }))
   on('session.root', () => ({ value: ROOT }))
   on('fs.list', () => ({
-    value: Object.entries(files).map(([name, { mtimeMs }]) => file(name, mtimeMs)),
+    value: Object.entries(files)
+      .filter(([name]) => !name.includes('/'))
+      .map(([name, { mtimeMs }]) => file(name, mtimeMs)),
   }))
   on('fs.read', (_$, e) => ({ value: files[e.path.split('/').pop() ?? '']?.text ?? '' }))
   on('fs.write', (_$, e) => {
     files[e.path.split('/').pop() ?? ''] = { text: e.text, mtimeMs: clock.now() + 1 }
     return { value: undefined }
   })
-  on('fs.exists', (_$, e) => ({ value: (e.path.split('/').pop() ?? '') in files }))
+  on('fs.exists', (_$, e) => ({ value: e.path.replace(`${ROOT}/.todo/`, '') in files }))
+  on('process.run', (_$, e) => {
+    runs.push(e.argv)
+    const [command, from, to] = e.argv
+    if (command === 'mv' && from && to) {
+      const name = from.split('/').pop() ?? ''
+      files[`archive/${name}`] = files[name]!
+      delete files[name]
+    }
+    const stderr = failing ? 'denied' : ''
+    const output = { stdout: '', stderr, isStdoutTruncated: false, isStderrTruncated: false }
+    return { value: { exitCode: failing ? 1 : 0, ...output } }
+  })
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.panes', () => ({ value: open ? [PANE_ROW] : [] }))
@@ -563,6 +584,94 @@ test('refuses a project whose file exists already', async ($, on) => {
 
   await pane.press({ key: 'projects' })
   expect(await pane.find({ text: 'nuxt.md exists already.' })).toBeUndefined()
+})
+
+test('moves with mv here and with move on Windows', async () => {
+  expect(
+    moveCommands('/home/flo/app', '.todo/a.md', '.todo/archive/a.md', '.todo/archive'),
+  ).toEqual([
+    ['mkdir', '-p', '.todo/archive'],
+    ['mv', '.todo/a.md', '.todo/archive/a.md'],
+  ])
+  expect(moveCommands('C:\\app', '.todo/a.md', '.todo/archive/a.md', '.todo/archive')).toEqual([
+    ['cmd', '/c', 'if', 'not', 'exist', '.todo\\archive', 'mkdir', '.todo\\archive'],
+    ['cmd', '/c', 'move', '.todo\\a.md', '.todo\\archive\\a.md'],
+  ])
+})
+
+test('archives the active project on a second press and clears .active', async ($, on) => {
+  const files: Record<string, { text: string; mtimeMs: number }> = {
+    'nuxt.md': { text: LIST, mtimeMs: 1 },
+    'other.md': { text: '# Other\n\n- [ ] Open item', mtimeMs: 5 },
+    '.active': { text: 'nuxt.md', mtimeMs: 1 },
+  }
+  engine(on, files)
+  await start($)
+  const pane = await $.ui.mount(PANE)
+
+  await pane.press({ key: 'projects' })
+  await pane.press({ key: 'archive' })
+  expect(await pane.find({ text: 'Archive "Nuxt migration"? Press c again.' })).toBeDefined()
+  expect(runs).toEqual([])
+
+  await pane.press({ key: 'archive' })
+
+  expect(runs.at(-1)).toEqual(['mv', '.todo/nuxt.md', '.todo/archive/nuxt.md'])
+  expect(files['archive/nuxt.md']?.text).toBe(LIST)
+  expect(files['.active']?.text).toBe('')
+  expect(await pane.find({ text: 'Nuxt migration' })).toBeUndefined()
+  expect(await selectedTitles(pane)).toEqual(['Other'])
+})
+
+test('keeps the project when the archive holds one of that name or the move fails', async ($, on) => {
+  const files = {
+    'nuxt.md': { text: LIST, mtimeMs: 1 },
+    'archive/nuxt.md': { text: 'older', mtimeMs: 0 },
+  }
+  engine(on, files)
+  await start($)
+  const pane = await $.ui.mount(PANE)
+
+  await pane.press({ key: 'projects' })
+  await pane.press({ key: 'archive' })
+  await pane.press({ key: 'archive' })
+
+  expect(runs).toEqual([])
+  expect(await pane.find({ text: '.todo/archive/nuxt.md exists already.' })).toBeDefined()
+
+  delete (files as Record<string, unknown>)['archive/nuxt.md']
+  failing = true
+  await pane.press({ key: 'archive' })
+  await pane.press({ key: 'archive' })
+
+  expect(files['nuxt.md'].text).toBe(LIST)
+  expect(await pane.find({ text: 'Could not archive nuxt.md: denied' })).toBeDefined()
+})
+
+test('shows each action button with its key', async ($, on) => {
+  engine(on, { 'nuxt.md': { text: LIST, mtimeMs: 1 } })
+  await start($)
+  const pane = await $.ui.mount(PANE)
+
+  await pane.press({ key: 'item-5' })
+  const items = await pane.findAll({ type: 'Button' })
+  await pane.press({ key: 'projects' })
+  const projectButtons = await pane.findAll({ type: 'Button' })
+
+  const actions = [...items, ...projectButtons].filter((button) =>
+    /^[a-z]$/.test(String(button.props.hotkey ?? '')),
+  )
+  expect(actions.map((button) => button.props.hotkey).toSorted()).toEqual([
+    'a',
+    'c',
+    'd',
+    'n',
+    'p',
+    'p',
+    's',
+    'x',
+  ])
+  expect(actions.every((button) => button.props.plain)).toBe(true)
 })
 
 test('says so when there is no list', async ($, on) => {

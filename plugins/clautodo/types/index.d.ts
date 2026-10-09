@@ -22,7 +22,8 @@ declare module 'claude-code' {
       mode: Mode
       notice: string | null
       line: number | null
-      confirming: boolean
+      // What waits for a second press: deleting the selected item or archiving the active list.
+      pending: 'delete' | 'archive' | null
       // The lists the project view shows; null while it is closed.
       projects: Project[] | null
     }
