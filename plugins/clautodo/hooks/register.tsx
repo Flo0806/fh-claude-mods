@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, ToolCallResult } from 'claude-code'
 
-import type { Item, Mode, Status, TodoList } from '../types'
+import type { Item, Mode, Project, Status, TodoList } from '../types'
 import { DISABLED, RULES } from './rules'
 import {
   addItem,
@@ -24,6 +24,7 @@ const notice = atom({ plugin: 'clautodo', key: 'notice' } as const, null)
 const line = atom({ plugin: 'clautodo', key: 'line' } as const, null)
 // Whether the delete button waits for a second press.
 const confirming = atom({ plugin: 'clautodo', key: 'confirming' } as const, false)
+const projects = atom({ plugin: 'clautodo', key: 'projects' } as const, null)
 
 const PANE = 'clautodo'
 
@@ -90,11 +91,47 @@ const activeList = async ($: EngineInterface, dir: string) => {
   return named ?? lists.toSorted((a, b) => b.mtimeMs - a.mtimeMs)[0]
 }
 
+const todoDir = async ($: EngineInterface) => `${await $.session.root()}/.todo`
+
+const readProjects = async ($: EngineInterface): Promise<Project[]> => {
+  const dir = await todoDir($)
+  const entries = await $.fs.list(dir).catch(() => [])
+  const names = entries
+    .filter((entry) => entry.kind === 'file' && entry.name.endsWith('.md'))
+    .map((entry) => entry.name)
+    .toSorted()
+
+  return Promise.all(
+    names.map(async (name) => {
+      const { title, items } = parse(String(await $.fs.read(`${dir}/${name}`).catch(() => '')))
+      const done = items.filter((item) => item.status === 'done').length
+      return { name, title, done, total: items.length }
+    }),
+  )
+}
+
+const toggleProjects = async ($: EngineInterface) => {
+  await touch($)
+  const isOpen = (await read($, projects)) !== null
+  const next = isOpen ? null : await readProjects($)
+  await update($, projects, () => next)
+}
+
+// Writes .todo/.active and shows that list's items.
+const activate = async ($: EngineInterface, name: string) => {
+  await touch($)
+  await $.fs.write(`${await todoDir($)}/${ACTIVE}`, `${name}\n`)
+  pointer = { mtimeMs: -1, name }
+  await update($, projects, () => null)
+  await update($, selected, () => null)
+  await load($, true)
+}
+
 // Name and mtime of the list last read, so a poll reads the file only after it changed.
 let seen = ''
 
 const load = async ($: EngineInterface, force = false) => {
-  const dir = `${await $.session.root()}/.todo`
+  const dir = await todoDir($)
   const entry = await activeList($, dir)
   const stamp = entry ? `${entry.name}:${entry.mtimeMs}` : ''
   if (stamp === seen && !force) return
@@ -239,6 +276,7 @@ export const register: Register = (on) => {
     await update($, selected, () => null)
     await update($, mode, () => 'view')
     await update($, notice, () => null)
+    await update($, projects, () => null)
     await touch($)
     await $.ui.open(PANE_OPEN)
     return {}
@@ -249,6 +287,11 @@ export const register: Register = (on) => {
   on('ui.close', { id: PANE }, async ($, e, next) => {
     const field = await read($, mode)
     const isAsking = await read($, confirming)
+    if (e.origin.kind === 'person' && (await read($, projects)) !== null) {
+      await toggleProjects($)
+      await refocus($, 'projects')
+      return { value: undefined }
+    }
     if (e.origin.kind !== 'person' || (field === 'view' && !isAsking)) return next(e)
     await touch($)
     await update($, mode, () => 'view')
@@ -288,9 +331,54 @@ export const register: Register = (on) => {
     // Mobile has no text field, so it cannot add items.
     const Input = 'Input' in elements ? elements.Input : undefined
     const todos = await read($, list)
+    const shownProjects = await read($, projects)
+    const switchButton = (
+      <Button
+        key="projects"
+        hotkey="p"
+        label={shownProjects ? 'items' : 'projects'}
+        onPress={() => toggleProjects($)}
+      />
+    )
+
+    if (shownProjects) {
+      const active = todos?.path.split('/').pop()
+      return (
+        <Box flexDirection="column" gap={1}>
+          <Text bold>Projects</Text>
+          <Box flexDirection="column">
+            {shownProjects.length === 0 && <Text dimColor>No lists in .todo/ yet.</Text>}
+            {shownProjects.map((project, i) => (
+              <Button
+                key={`project-${project.name}`}
+                plain
+                hotkey={i < 9 ? String(i + 1) : undefined}
+                onPress={() => activate($, project.name)}
+              >
+                <Text
+                  bold={project.name === active}
+                  color={project.name === active ? 'claude' : undefined}
+                >
+                  {project.title ?? project.name}
+                </Text>{' '}
+                <Text dimColor>
+                  {project.done}/{project.total}
+                </Text>
+              </Button>
+            ))}
+          </Box>
+          <Box gap={2}>{switchButton}</Box>
+        </Box>
+      )
+    }
 
     if (todos === null || todos.items.length === 0) {
-      return <Text dimColor>No todo list in .todo/ yet.</Text>
+      return (
+        <Box flexDirection="column" gap={1}>
+          <Text dimColor>No todo list in .todo/ yet.</Text>
+          <Box gap={2}>{switchButton}</Box>
+        </Box>
+      )
     }
 
     const { path, title, items } = todos
@@ -409,6 +497,7 @@ export const register: Register = (on) => {
             {Input && (
               <Button key="add" hotkey="a" label="add" onPress={() => openField($, 'add')} />
             )}
+            {switchButton}
             {item && (
               <Button
                 key="delete"

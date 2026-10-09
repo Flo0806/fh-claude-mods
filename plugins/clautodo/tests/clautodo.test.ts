@@ -481,6 +481,45 @@ test('switches lists on the next poll when .todo/.active changes', async ($, on)
   expect(await hint.find({ text: '☐ 0/1' })).toBeDefined()
 })
 
+test('lists the projects with their progress and switches the active one', async ($, on) => {
+  const files = {
+    'nuxt.md': { text: LIST, mtimeMs: 1 },
+    'other.md': { text: '# Other\n\n- [x] Done item\n- [ ] Open item', mtimeMs: 5 },
+    '.active': { text: 'nuxt.md', mtimeMs: 1 },
+  }
+  engine(on, files)
+  await start($)
+  const pane = await $.ui.mount(PANE)
+
+  await pane.press({ key: 'projects' })
+
+  expect(await pane.find({ text: 'Projects' })).toBeDefined()
+  expect(await pane.find({ text: '1/3' })).toBeDefined()
+  expect(await pane.find({ text: '1/2' })).toBeDefined()
+  expect(await selectedTitles(pane)).toEqual(['Nuxt migration'])
+
+  await pane.press({ key: 'project-other.md' })
+
+  expect(files['.active'].text).toBe('other.md\n')
+  expect(await pane.find({ text: 'Other' })).toBeDefined()
+  expect(await pane.find({ text: 'Open item' })).toBeDefined()
+  expect(await pane.find({ key: 'projects' })).toBeDefined()
+})
+
+test('goes back to the items without a change', async ($, on) => {
+  const files = { 'nuxt.md': { text: LIST, mtimeMs: 1 } }
+  engine(on, files)
+  await start($)
+  const pane = await $.ui.mount(PANE)
+
+  await pane.press({ key: 'projects' })
+  expect((await pane.find({ key: 'projects' }))?.props.label).toBe('items')
+  await pane.press({ key: 'projects' })
+
+  expect(await pane.find({ text: 'Nuxt migration' })).toBeDefined()
+  expect(Object.keys(files)).toEqual(['nuxt.md'])
+})
+
 test('says so when there is no list', async ($, on) => {
   engine(on, {})
   await start($)

@@ -11,6 +11,9 @@ export type Mode = 'view' | 'add' | 'edit' | 'line'
 
 export type Summary = { done: number; total: number; running?: string }
 
+// One list in .todo/ as the project view shows it.
+export type Project = { name: string; title?: string; done: number; total: number }
+
 declare module 'claude-code' {
   interface PluginState {
     clautodo: {
@@ -20,6 +23,8 @@ declare module 'claude-code' {
       notice: string | null
       line: number | null
       confirming: boolean
+      // The lists the project view shows; null while it is closed.
+      projects: Project[] | null
     }
   }
 }
