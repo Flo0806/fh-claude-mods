@@ -48,6 +48,10 @@ let open = true
 let runs: (readonly string[])[] = []
 let failing = false
 
+// Whether the engine places the pane, and the toasts the mod raised.
+let placed = true
+let toasts: string[] = []
+
 const PANE_ROW = { id: 'clautodo', title: 'Todo', isShown: true, isFocused: true, isPlaced: true }
 
 // The engine beneath the mod, with a .todo folder held in memory.
@@ -55,6 +59,8 @@ const engine = (on: On, files: Record<string, { text: string; mtimeMs: number }>
   open = true
   runs = []
   failing = false
+  placed = true
+  toasts = []
   const clock = mock.clock(on, { now: 0 })
   on('session.start', () => ({ cwd: ROOT }))
   on('session.root', () => ({ value: ROOT }))
@@ -82,7 +88,13 @@ const engine = (on: On, files: Record<string, { text: string; mtimeMs: number }>
     return { value: { exitCode: failing ? 1 : 0, ...output } }
   })
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
-  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.open', () => ({
+    value: placed ? { isPlaced: true } : { isPlaced: false, reason: 'narrow' },
+  }))
+  on('ui.toast', (_$, e) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
   on('ui.panes', () => ({ value: open ? [PANE_ROW] : [] }))
   on('ui.close', () => {
     open = false
@@ -685,6 +697,18 @@ test('shows each action button with its key', async ($, on) => {
     'x',
   ])
   expect(actions.every((button) => button.props.plain)).toBe(true)
+})
+
+test('says why when the engine does not place the pane', async ($, on) => {
+  engine(on, { 'nuxt.md': { text: LIST, mtimeMs: 1 } })
+  await start($)
+
+  await $.command.run({ command: 'todo', args: '' } as never)
+  expect(toasts).toEqual([])
+
+  placed = false
+  await $.command.run({ command: 'todo', args: '' } as never)
+  expect(toasts).toEqual(['The todo pane waits: narrow'])
 })
 
 test('says so when there is no list', async ($, on) => {
