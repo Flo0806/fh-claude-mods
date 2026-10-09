@@ -180,11 +180,13 @@ const remove = async ($: EngineInterface, path: string, item: Item) => {
 
 // The field handlers below close their field; an empty or unchanged entry changes nothing.
 
-const add = async ($: EngineInterface, path: string, count: number, entry: string) => {
+// The new item is the last one; the list is read again, as it may have changed since it was drawn.
+const add = async ($: EngineInterface, path: string, entry: string) => {
   await touch($)
   if (entry.trim() !== '') {
     await rewrite($, path, (text) => addItem(text, entry))
-    await update($, selected, () => count)
+    const count = (await read($, list))?.items.length ?? 0
+    if (count > 0) await update($, selected, () => count - 1)
   }
   await update($, mode, () => 'view')
 }
@@ -323,13 +325,13 @@ const stepBack = async ($: EngineInterface) => {
   return true
 }
 
-// The pane's buttons and fields bound to this session; `path` and `count` are the drawn list's.
-const actionsFor = ($: EngineInterface, path: string, count: number): Actions => ({
+// The pane's buttons and fields bound to this session; `path` is the drawn list's.
+const actionsFor = ($: EngineInterface, path: string): Actions => ({
   select: (index) => select($, index),
   changeStatus: (item: Item, status: Status) =>
     rewrite($, path, (text) => setStatus(text, item, status)),
   remove: (item) => remove($, path, item),
-  add: (entry) => add($, path, count, entry),
+  add: (entry) => add($, path, entry),
   rename: (item, entry) => rename($, path, item, entry),
   changeLine: (item, index, entry) => changeLine($, path, item, index, entry),
   openField: (field) => openField($, field),
@@ -369,11 +371,7 @@ export const register: Register = (on) => {
       pending: await read($, pending),
       notice: await read($, notice),
     }
-    return drawPane(
-      $.ui.resolve(e),
-      view,
-      actionsFor($, todos?.path ?? '', todos?.items.length ?? 0),
-    )
+    return drawPane($.ui.resolve(e), view, actionsFor($, todos?.path ?? ''))
   })
 
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {

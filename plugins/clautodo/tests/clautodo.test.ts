@@ -290,6 +290,19 @@ test('adds an item from the pane and selects it', async ($, on) => {
   expect(await pane.find({ key: 'new-item' })).toBeUndefined()
 })
 
+test('selects the added item even when the list grew since it was drawn', async ($, on) => {
+  const files = { 'nuxt.md': { text: LIST, mtimeMs: 1 } }
+  engine(on, files)
+  await start($)
+  const pane = await $.ui.mount(PANE)
+
+  await pane.press({ key: 'add' })
+  files['nuxt.md'].text = addItem(LIST, 'Added meanwhile')
+  await pane.input({ key: 'new-item', text: 'Write the changelog' })
+
+  expect(await selectedTitles(pane)).toEqual(['Write the changelog'])
+})
+
 test('closes the field without a change on an empty title', async ($, on) => {
   const files = { 'nuxt.md': { text: LIST, mtimeMs: 1 } }
   engine(on, files)
