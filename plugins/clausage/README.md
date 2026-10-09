@@ -3,7 +3,7 @@
 Usage and context at a glance: three compact, colored progress bars in one line above the prompt.
 
 ```
-5h ▰▰▱▱▱▱▱▱ 23% ↻14:30  7d ▰▰▰▱▱▱▱▱ 41% ↻Mo  ctx ▰▱▱▱▱▱▱▱ 6%
+5h ▰▰▱▱▱▱▱▱ 23% ↻ 14:30  7d ▰▰▰▱▱▱▱▱ 41% ↻ Mo  ctx ▰▱▱▱▱▱▱▱ 6%
 ```
 
 | Bar   | Shows                                                     |

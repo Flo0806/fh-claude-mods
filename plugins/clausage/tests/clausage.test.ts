@@ -52,8 +52,8 @@ test('draws all three bars, colored by level, with reset times', async ($, on) =
   expect((await band.find({ text: /^▰▰▰▰▱▱▱▱ 55%$/ }))?.props.color).toBe('warning')
   expect((await band.find({ text: /^▰▰▰▰▰▰▰▱ 85%$/ }))?.props.color).toBe('error')
   expect((await band.find({ text: /^▱▱▱▱▱▱▱▱ 6%$/ }))?.props.color).toBe('success')
-  expect(await band.find({ text: /^↻14:30$/ })).toBeDefined()
-  expect(await band.find({ text: /^↻Mon?$/ })).toBeDefined()
+  expect(await band.find({ text: /^↻ 14:30$/ })).toBeDefined()
+  expect(await band.find({ text: /^↻ Mon?$/ })).toBeDefined()
 })
 
 test('shows only a context placeholder off a subscription, before the first response', async ($, on) => {

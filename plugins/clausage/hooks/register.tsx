@@ -76,7 +76,7 @@ export const register: Register = (on) => {
         ) : (
           <Text dimColor>{meter(0)} –</Text>
         )}
-        {bar?.resetsAt && <Text dimColor>↻{resetLabel(bar.resetsAt, now)}</Text>}
+        {bar?.resetsAt && <Text dimColor>↻ {resetLabel(bar.resetsAt, now)}</Text>}
       </Box>
     )
 

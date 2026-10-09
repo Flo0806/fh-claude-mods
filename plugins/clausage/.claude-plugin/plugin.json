@@ -1,6 +1,6 @@
 {
   "name": "clausage",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Usage & context progress bars above the prompt: 5-hour limit, 7-day limit, context window",
   "author": { "name": "Florian Heuberger" },
   "keywords": ["usage", "rate-limit", "context", "progress", "statusbar", "tokens"],

@@ -133,14 +133,18 @@ const closeWhenIdle = async ($: EngineInterface) => {
   if (isOpen && isIdle && (await read($, mode)) === 'view') await $.ui.close({ id: PANE })
 }
 
+// Opens before loading, so the engine places the pane as the answer to /todo at any width; an
+// open it takes for one of the plugin's own waits undrawn on a narrow terminal. Activity counts
+// from before the open, so the idle check never closes the fresh pane.
 const openPane = async ($: EngineInterface) => {
   await touch($)
-  await load($, true)
+  const opened = await $.ui.open(PANE_OPEN)
+  if (!opened.isPlaced) $.ui.toast(`The todo pane waits: ${opened.reason}`)
   await update($, selected, () => null)
   await update($, mode, () => 'view')
   await update($, notice, () => null)
   await update($, projects, () => null)
-  await $.ui.open(PANE_OPEN)
+  await load($, true)
 }
 
 // Reads the file again before writing, so an edit made meanwhile is kept.
