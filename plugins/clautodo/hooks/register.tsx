@@ -71,12 +71,23 @@ function pass<E, R>(_$: unknown, e: E, next: (e: E) => R) {
   return next(e)
 }
 
-// Until projects can be switched, the most recently changed list is the active one.
-const newestList = async ($: EngineInterface, dir: string) => {
+const ACTIVE = '.active'
+
+// The name in .todo/.active and the mtime it was read at, so a poll reads it only after a change.
+let pointer = { mtimeMs: -1, name: '' }
+
+// The list named in .todo/.active, or the most recently changed one without a valid name there.
+const activeList = async ($: EngineInterface, dir: string) => {
   const entries = await $.fs.list(dir).catch(() => [])
-  return entries
-    .filter((entry) => entry.kind === 'file' && entry.name.endsWith('.md'))
-    .toSorted((a, b) => b.mtimeMs - a.mtimeMs)[0]
+  const lists = entries.filter((entry) => entry.kind === 'file' && entry.name.endsWith('.md'))
+  const marker = entries.find((entry) => entry.kind === 'file' && entry.name === ACTIVE)
+
+  if (marker && marker.mtimeMs !== pointer.mtimeMs) {
+    const name = String(await $.fs.read(`${dir}/${ACTIVE}`).catch(() => '')).trim()
+    pointer = { mtimeMs: marker.mtimeMs, name }
+  }
+  const named = marker && lists.find((entry) => entry.name === pointer.name)
+  return named ?? lists.toSorted((a, b) => b.mtimeMs - a.mtimeMs)[0]
 }
 
 // Name and mtime of the list last read, so a poll reads the file only after it changed.
@@ -84,7 +95,7 @@ let seen = ''
 
 const load = async ($: EngineInterface, force = false) => {
   const dir = `${await $.session.root()}/.todo`
-  const entry = await newestList($, dir)
+  const entry = await activeList($, dir)
   const stamp = entry ? `${entry.name}:${entry.mtimeMs}` : ''
   if (stamp === seen && !force) return
   seen = stamp

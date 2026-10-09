@@ -52,7 +52,7 @@ The pane closes by itself after two minutes without a key press, never while a f
 
 ## Notes
 
-- The most recently changed `.todo/*.md` is the active list.
+- The active list is the file named in `.todo/.active` (just the file name, e.g. `nuxt.md`). Without it, or when it names no list, the most recently changed `.todo/*.md` is used.
 - The list is your own working note, so keep `.todo/` out of git, e.g. once in `~/.config/git/ignore`.
 - Without a `.todo` folder nothing is shown.
 

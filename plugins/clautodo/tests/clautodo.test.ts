@@ -439,6 +439,48 @@ test('drops a pending delete on any other action', async ($, on) => {
   expect((await pane.find({ key: 'delete' }))?.props.label).toBe('confirm')
 })
 
+test('shows the list named in .todo/.active, even when another changed later', async ($, on) => {
+  engine(on, {
+    'nuxt.md': { text: LIST, mtimeMs: 1 },
+    'other.md': { text: '- [ ] Other item', mtimeMs: 5 },
+    '.active': { text: 'nuxt.md\n', mtimeMs: 1 },
+  })
+  await start($)
+
+  const hint = await $.ui.mount(HINT)
+
+  expect(await hint.find({ text: '☐ 1/3 · Adapt the tests' })).toBeDefined()
+})
+
+test('falls back to the newest list when .todo/.active names none', async ($, on) => {
+  engine(on, {
+    'nuxt.md': { text: LIST, mtimeMs: 1 },
+    'other.md': { text: '- [ ] Other item', mtimeMs: 5 },
+    '.active': { text: 'gone.md', mtimeMs: 1 },
+  })
+  await start($)
+
+  const hint = await $.ui.mount(HINT)
+
+  expect(await hint.find({ text: '☐ 0/1' })).toBeDefined()
+})
+
+test('switches lists on the next poll when .todo/.active changes', async ($, on) => {
+  const files = {
+    'nuxt.md': { text: LIST, mtimeMs: 1 },
+    'other.md': { text: '- [ ] Other item', mtimeMs: 5 },
+    '.active': { text: 'nuxt.md', mtimeMs: 1 },
+  }
+  const clock = engine(on, files)
+  await start($)
+  const hint = await $.ui.mount(HINT)
+
+  files['.active'] = { text: 'other.md', mtimeMs: 2 }
+  await clock.advance(2000)
+
+  expect(await hint.find({ text: '☐ 0/1' })).toBeDefined()
+})
+
 test('says so when there is no list', async ($, on) => {
   engine(on, {})
   await start($)
