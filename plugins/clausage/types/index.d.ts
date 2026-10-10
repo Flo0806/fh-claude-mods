@@ -9,6 +9,6 @@ export type Usage = {
 
 declare module 'claude-code' {
   interface PluginState {
-    clausage: { usage: Usage | null }
+    clausage: { usage: Usage | null; compacting: boolean }
   }
 }

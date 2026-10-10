@@ -4,6 +4,7 @@ import type { Register, SessionContextUsage, SessionRateLimit, SessionUsage } fr
 import type { Bar, Usage } from '../types'
 
 const usage = atom({ plugin: 'clausage', key: 'usage' } as const, null)
+const compacting = atom({ plugin: 'clausage', key: 'compacting' } as const, false)
 
 const toBar = (limit?: SessionRateLimit): Bar | undefined =>
   limit && { percent: limit.percentUsed, resetsAt: limit.resetsAt }
@@ -56,9 +57,35 @@ export const register: Register = (on) => {
     return next(e)
   })
 
+  // Step aside while the main conversation compacts, so the engine's progress shows in the band.
+  // Afterwards read the usage again: no measure follows a compaction until the next turn.
+  on('session.compact', async ($, e, next) => {
+    if (e.trigger === 'precompute' || e.agentId !== undefined) return next(e)
+
+    await update($, compacting, () => true)
+    try {
+      const result = await next(e)
+      if (result.skip === undefined) {
+        const now = toUsage(await $.session.usage())
+        await update($, usage, () => now)
+      }
+      return result
+    } finally {
+      await update($, compacting, () => false)
+    }
+  })
+
+  // A /clear starts the conversation over, so the old context fill no longer applies.
+  on('session.end', async ($, e, next) => {
+    if (e.reason === 'clear') {
+      await update($, usage, (current) => current && { ...current, context: undefined })
+    }
+    return next(e)
+  })
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const current = await read($, usage)
-    if (e.props.hasSurvey || current === null) {
+    if (e.props.hasSurvey || current === null || (await read($, compacting))) {
       return next(e)
     }
 
