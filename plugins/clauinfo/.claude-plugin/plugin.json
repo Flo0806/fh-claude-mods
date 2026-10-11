@@ -1,0 +1,8 @@
+{
+  "name": "clauinfo",
+  "version": "0.1.0",
+  "description": "Model and effort at a glance above the prompt, with a toast at start and on every change",
+  "author": { "name": "Florian Heuberger" },
+  "keywords": ["model", "effort", "status", "statusbar", "toast"],
+  "types": "./types/index.d.ts"
+}
