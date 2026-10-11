@@ -11,6 +11,11 @@
       "description": "Kompakte Usage-Anzeige: 5h-Limit, 7-Tage-Limit und Context als farbige Progressbars"
     },
     {
+      "name": "clauinfo",
+      "source": "./plugins/clauinfo",
+      "description": "Model und Effort auf einen Blick über dem Prompt, mit Toast beim Start und bei jeder Änderung"
+    },
+    {
       "name": "clautodo",
       "source": "./plugins/clautodo",
       "description": "Projekt-Todo-Liste in .todo/*.md, Fortschritt als eine dezente Zeile unter dem Prompt"
