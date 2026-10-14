@@ -1,5 +1,11 @@
 import { atom, read, update } from 'claude-code'
-import type { Register, SessionContextUsage, SessionRateLimit, SessionUsage } from 'claude-code'
+import type {
+  EngineInterface,
+  Register,
+  SessionContextUsage,
+  SessionRateLimit,
+  SessionUsage,
+} from 'claude-code'
 
 import type { Bar, Usage } from '../types'
 
@@ -16,11 +22,27 @@ const contextBar = ({ percent, tokens, window }: SessionContextUsage): Bar | und
   return undefined
 }
 
+// Without a measurement (right after a compaction) estimate the fill the way /context does, against
+// the same window the status line measures. Only a read that asked for the breakdown has one.
+const estimatedBar = ({ breakdown, window }: SessionContextUsage): Bar | undefined =>
+  breakdown && window > 0 ? { percent: (breakdown.totalTokens / window) * 100 } : undefined
+
 const toUsage = ({ rateLimits, context }: Pick<SessionUsage, 'rateLimits' | 'context'>): Usage => ({
   fiveHour: toBar(rateLimits.find((r) => r.kind === 'five_hour')),
   sevenDay: toBar(rateLimits.find((r) => r.kind === 'seven_day')),
-  context: contextBar(context),
+  context: contextBar(context) ?? estimatedBar(context),
 })
+
+// Reads the usage once the compacted conversation stands, then brings the band back.
+const settle = async ($: EngineInterface) => {
+  try {
+    const now = await $.session.usage({ breakdown: 'summary' })
+    const settled = toUsage(now)
+    await update($, usage, () => settled)
+  } finally {
+    await update($, compacting, () => false)
+  }
+}
 
 const WIDTH = 8
 
@@ -48,6 +70,8 @@ export const register: Register = (on) => {
   on('session.start', async ($, e, next) => {
     const now = toUsage(await $.session.usage())
     await update($, usage, () => now)
+    // A reload while the band waits for a compaction's figures drops that wait: show the band again.
+    await update($, compacting, () => false)
     return next(e)
   })
 
@@ -58,20 +82,23 @@ export const register: Register = (on) => {
   })
 
   // Step aside while the main conversation compacts, so the engine's progress shows in the band.
-  // Afterwards read the usage again: no measure follows a compaction until the next turn.
+  // The engine puts the compacted conversation in place only once every hook has returned, so a
+  // read in here still sees the old fill: read it right after, with the band aside until then.
   on('session.compact', async ($, e, next) => {
     if (e.trigger === 'precompute' || e.agentId !== undefined) return next(e)
 
     await update($, compacting, () => true)
     try {
       const result = await next(e)
-      if (result.skip === undefined) {
-        const now = toUsage(await $.session.usage())
-        await update($, usage, () => now)
+      if (result.skip !== undefined) {
+        await update($, compacting, () => false)
+        return result
       }
+      $.clock.after(0, () => void settle($))
       return result
-    } finally {
+    } catch (error) {
       await update($, compacting, () => false)
+      throw error
     }
   })
 

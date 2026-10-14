@@ -1,4 +1,10 @@
-import type { On, SessionContextUsage, SessionMeasureInput } from 'claude-code'
+import type {
+  On,
+  SessionContextBreakdown,
+  SessionContextUsage,
+  SessionMeasureInput,
+  SessionUsageArgs,
+} from 'claude-code'
 import { expect, mock, test, type Plugin } from 'claude-code/testing'
 
 const NOW = Date.parse('2026-10-09T11:00:00+02:00')
@@ -18,13 +24,19 @@ const BAND = {
 } as const
 
 // The engine's own end of each chain the mod calls next() on.
-const engine = (on: On, context = (): SessionContextUsage => ({ window: 200_000 })) => {
-  mock.clock(on, { now: NOW })
-  on('session.usage', () => ({ value: { startedAt: NOW, context: context(), rateLimits: [] } }))
+const engine = (
+  on: On,
+  context = (_args: SessionUsageArgs): SessionContextUsage => ({ window: 200_000 }),
+) => {
+  const clock = mock.clock(on, { now: NOW })
+  on('session.usage', (_$, e) => ({
+    value: { startedAt: NOW, context: context(e), rateLimits: [] },
+  }))
   on('session.measure', (_$, e) => ({ changed: e.changed }))
   on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
   // An empty band, as the engine draws when no plugin shows anything.
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => $.ui.resolve(e).Box({}))
+  return clock
 }
 
 const measure = (e: Partial<SessionMeasureInput>): SessionMeasureInput => ({
@@ -92,25 +104,35 @@ test(
   },
 )
 
-test('steps aside while compacting and reads the context afresh afterwards', async ($, on) => {
-  // The engine's compaction: the band is drawn mid-way, the context has shrunk once it is done.
-  let percent = 92
+test('steps aside while compacting, then estimates what the compaction left', async ($, on) => {
+  // The engine's order: the compacted conversation stands only once every hook has returned, and
+  // until the next response there is no measurement, only the /context estimate.
+  let compacted = false
+  const clock = engine(on, ({ breakdown }) =>
+    !compacted
+      ? { window: 200_000, tokens: 184_000, percent: 92 }
+      : breakdown
+        ? { window: 200_000, breakdown: { totalTokens: 8_000 } as SessionContextBreakdown }
+        : { window: 200_000 },
+  )
   let during: (string | undefined)[] = []
-  engine(on, () => ({ window: 200_000, percent }))
   on('session.compact', async (_$, e) => {
     during = (await (await $.ui.mount(BAND)).findAll({ type: 'Text' })).map((t) => t.text)
-    percent = 4
     return { messages: e.messages }
   })
 
-  await $.session.measure(measure({ context: { window: 200_000, percent: 92 } }))
+  await $.session.measure(measure({ context: { window: 200_000, tokens: 184_000, percent: 92 } }))
   await $.session.compact({
     trigger: 'manual',
     messages: [{ role: 'user', text: 'a long conversation', toolUses: [] }],
   })
+  compacted = true
+  const waiting = (await (await $.ui.mount(BAND)).findAll({ type: 'Text' })).map((t) => t.text)
+  await clock.settle()
   const band = await $.ui.mount(BAND)
 
   expect(during).not.toContain('ctx')
+  expect(waiting).not.toContain('ctx')
   expect(await band.find({ text: /^▱▱▱▱▱▱▱▱ 4%$/ })).toBeDefined()
 })
 
