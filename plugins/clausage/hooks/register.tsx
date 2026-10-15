@@ -33,11 +33,16 @@ const toUsage = ({ rateLimits, context }: Pick<SessionUsage, 'rateLimits' | 'con
   context: contextBar(context) ?? estimatedBar(context),
 })
 
-// Reads the usage once the compacted conversation stands, then brings the band back.
+// Reads the usage once the compacted conversation stands, then brings the band back. A measured
+// fill still there predates the compaction (some builds keep it until the next response), so the
+// estimate comes first.
 const settle = async ($: EngineInterface) => {
   try {
     const now = await $.session.usage({ breakdown: 'summary' })
-    const settled = toUsage(now)
+    const settled = {
+      ...toUsage(now),
+      context: estimatedBar(now.context) ?? contextBar(now.context),
+    }
     await update($, usage, () => settled)
   } finally {
     await update($, compacting, () => false)

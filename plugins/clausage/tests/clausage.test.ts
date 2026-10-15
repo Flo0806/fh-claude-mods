@@ -136,6 +136,29 @@ test('steps aside while compacting, then estimates what the compaction left', as
   expect(await band.find({ text: /^▱▱▱▱▱▱▱▱ 4%$/ })).toBeDefined()
 })
 
+test('estimates after compacting even where the engine keeps the old measurement', async ($, on) => {
+  // Some builds keep the last response's figures until the next one: they predate the compaction.
+  let compacted = false
+  const clock = engine(on, ({ breakdown }) => ({
+    window: 200_000,
+    tokens: 184_000,
+    percent: 92,
+    ...(compacted && breakdown && { breakdown: { totalTokens: 8_000 } as SessionContextBreakdown }),
+  }))
+  on('session.compact', (_$, e) => ({ messages: e.messages }))
+
+  await $.session.measure(measure({ context: { window: 200_000, tokens: 184_000, percent: 92 } }))
+  await $.session.compact({
+    trigger: 'manual',
+    messages: [{ role: 'user', text: 'a long conversation', toolUses: [] }],
+  })
+  compacted = true
+  await clock.settle()
+  const band = await $.ui.mount(BAND)
+
+  expect(await band.find({ text: /^▱▱▱▱▱▱▱▱ 4%$/ })).toBeDefined()
+})
+
 test('shows the context placeholder again after /clear', async ($, on) => {
   engine(on)
   await $.session.measure(measure({ context: { window: 200_000, percent: 60 } }))
