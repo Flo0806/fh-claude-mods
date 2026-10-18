@@ -6,7 +6,7 @@
     "lint": "oxlint",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
-    "typecheck": "tsc -p plugins/clausage && tsc -p plugins/clauinfo && tsc -p plugins/clautodo"
+    "typecheck": "tsc -p plugins/clausage && tsc -p plugins/clauinfo && tsc -p plugins/clautodo && tsc -p plugins/clauguard"
   },
   "devDependencies": {
     "oxfmt": "^0.72.0",
