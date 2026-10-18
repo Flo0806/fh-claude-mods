@@ -1,0 +1,8 @@
+{
+  "name": "clauguard",
+  "version": "0.1.0",
+  "description": "A weekly usage budget per run and a handoff before the context fills: wrap up, /remember, compact, carry on",
+  "author": { "name": "Florian Heuberger" },
+  "keywords": ["usage", "budget", "limit", "context", "compact", "handoff", "goal"],
+  "types": "./types/index.d.ts"
+}
