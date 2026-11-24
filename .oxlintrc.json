@@ -9,5 +9,5 @@
   "env": {
     "builtin": true
   },
-  "ignorePatterns": ["plugins/*/.claude-plugin/types/**"]
+  "ignorePatterns": ["plugins/*/.claude-plugin/types/**", "plugins/*/hooks/make-colors.*"]
 }

@@ -1,0 +1,8 @@
+{
+  "name": "flo-code",
+  "version": "0.1.0",
+  "description": "Flo's desktop look: calm liquid theme with a slowly flowing backdrop and a clock above the prompt",
+  "author": { "name": "Florian Heuberger" },
+  "keywords": ["theme", "look", "clock", "desktop"],
+  "types": "./types/index.d.ts"
+}

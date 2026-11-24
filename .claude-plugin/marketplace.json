@@ -24,6 +24,11 @@
       "name": "clauguard",
       "source": "./plugins/clauguard",
       "description": "Usage-Budget pro Lauf und saubere Übergabe vor vollem Context: abschließen, /remember, compact, weiter"
+    },
+    {
+      "name": "flo-code",
+      "source": "./plugins/flo-code",
+      "description": "Ruhiger Desktop-Look: getönte Grautöne, fließender Hintergrund hinter Milchglas, Uhr über dem Prompt"
     }
   ]
 }

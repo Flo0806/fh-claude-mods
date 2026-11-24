@@ -4,12 +4,13 @@ A Claude Code plugin marketplace with small mods that change Claude Code's own i
 
 ## Mods
 
-| Mod                            | What it does                                                                                         |
-| ------------------------------ | ---------------------------------------------------------------------------------------------------- |
-| [clausage](plugins/clausage)   | Usage and context progress bars above the prompt: 5-hour limit, 7-day limit, context window          |
-| [clauinfo](plugins/clauinfo)   | Model and effort above the prompt, with a toast at start and on every change                         |
-| [clauguard](plugins/clauguard) | Usage budget per run and a handoff before the context fills: wrap up, `/remember`, compact, carry on |
-| [clautodo](plugins/clautodo)   | Project todo list in `.todo/*.md`, progress shown under the prompt                                   |
+| Mod                            | What it does                                                                                              |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| [clausage](plugins/clausage)   | Usage and context progress bars above the prompt: 5-hour limit, 7-day limit, context window               |
+| [clauinfo](plugins/clauinfo)   | Model and effort above the prompt, with a toast at start and on every change                              |
+| [clauguard](plugins/clauguard) | Usage budget per run and a handoff before the context fills: wrap up, `/remember`, compact, carry on      |
+| [clautodo](plugins/clautodo)   | Project todo list in `.todo/*.md`, progress shown under the prompt                                        |
+| [flo-code](plugins/flo-code)   | Calm desktop look: tinted grays, a slowly flowing backdrop behind frosted glass, a clock above the prompt |
 
 ## Install
 
