@@ -7,3 +7,5 @@
 # Types Claude generates
 plugins/*/.claude-plugin/types/
 node_modules/
+# Our notepad
+todo.md
