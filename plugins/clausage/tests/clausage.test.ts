@@ -168,3 +168,91 @@ test('shows the context placeholder again after /clear', async ($, on) => {
 
   expect(await band.find({ text: '▱▱▱▱▱▱▱▱ –' })).toBeDefined()
 })
+
+const longTalk = [{ role: 'user' as const, text: 'a long conversation', toolUses: [] }]
+
+test('shows the size the compaction reports right away', async ($, on) => {
+  engine(on, () => ({ window: 200_000, tokens: 184_000, percent: 92 }))
+  on('session.compact', (_$, e) => ({ messages: e.messages, tokensAfter: 8_000 }))
+
+  await $.session.measure(measure({ context: { window: 200_000, tokens: 184_000, percent: 92 } }))
+  await $.session.compact({ trigger: 'auto', messages: longTalk })
+  const band = await $.ui.mount(BAND)
+
+  expect(await band.find({ text: /^▱▱▱▱▱▱▱▱ 4%$/ })).toBeDefined()
+})
+
+test('ignores the old fill the engine repeats after compacting, until a response moves it', async ($, on) => {
+  engine(on, () => ({ window: 200_000, tokens: 184_000, percent: 92 }))
+  on('session.compact', (_$, e) => ({ messages: e.messages, tokensAfter: 8_000 }))
+  const old = { window: 200_000, tokens: 184_000, percent: 92 }
+
+  await $.session.measure(measure({ context: old }))
+  await $.session.compact({ trigger: 'manual', messages: longTalk })
+  await $.session.measure(
+    measure({
+      context: old,
+      changed: ['rateLimits'],
+      rateLimits: [{ kind: 'five_hour', percentUsed: 30, resetsAt: '2026-10-09T14:30:00+02:00' }],
+    }),
+  )
+  const kept = await $.ui.mount(BAND)
+  expect(await kept.find({ text: /^▱▱▱▱▱▱▱▱ 4%$/ })).toBeDefined()
+  expect(await kept.find({ text: /^▰▰▱▱▱▱▱▱ 30%$/ })).toBeDefined()
+
+  await $.session.measure(measure({ context: { window: 200_000, tokens: 20_000, percent: 10 } }))
+  const moved = await $.ui.mount(BAND)
+  expect(await moved.find({ text: /^▰▱▱▱▱▱▱▱ 10%$/ })).toBeDefined()
+})
+
+test('keeps the fill when a compaction is skipped', async ($, on) => {
+  engine(on)
+  on('session.compact', () => ({ skip: 'blocked' }))
+
+  await $.session.measure(measure({ context: { window: 200_000, percent: 60 } }))
+  await $.session.compact({ trigger: 'manual', messages: longTalk })
+  const band = await $.ui.mount(BAND)
+
+  expect(await band.find({ text: /^▰▰▰▰▰▱▱▱ 60%$/ })).toBeDefined()
+})
+
+test('keeps the placeholder after /clear while the engine repeats the old fill', async ($, on) => {
+  engine(on)
+  await $.session.measure(measure({ context: { window: 200_000, percent: 60 } }))
+
+  await $.session.end({ reason: 'clear', sessionId: 'old', resume: { id: 'old' } })
+  await $.session.measure(measure({ context: { window: 200_000, percent: 60 }, changed: ['cost'] }))
+  const band = await $.ui.mount(BAND)
+
+  expect(await band.find({ text: '▱▱▱▱▱▱▱▱ –' })).toBeDefined()
+})
+
+test('draws slim vector bars on the desktop, with the figures as themed text', async ($, on) => {
+  engine(on)
+  await $.session.measure(
+    measure({
+      context: { window: 200_000, percent: 6 },
+      rateLimits: [{ kind: 'five_hour', percentUsed: 85, resetsAt: '2026-10-09T14:30:00+02:00' }],
+    }),
+  )
+
+  const band = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const bars = await band.findAll({ type: 'Svg' })
+
+  expect(bars.map((b) => b.props.alt)).toEqual(['5h 85%', 'ctx 6%'])
+  expect(String(bars[0]?.props.source)).toContain('#f85149')
+  expect((await band.find({ type: 'Text', text: '85%' }))?.props.color).toBe('error')
+  expect(await band.find({ text: /▰|▱/ })).toBeUndefined()
+})
+
+test('draws an empty track on the desktop before the first measurement', async ($, on) => {
+  engine(on)
+  await $.session.measure(measure({}))
+
+  const band = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const bar = await band.find({ type: 'Svg' })
+
+  expect(bar?.props.alt).toBe('ctx –')
+  expect(String(bar?.props.source)).not.toContain('#3fb950')
+  expect(await band.find({ type: 'Text', text: '–' })).toBeDefined()
+})

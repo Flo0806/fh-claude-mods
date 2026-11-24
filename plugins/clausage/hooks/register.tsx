@@ -11,6 +11,10 @@ import type { Bar, Usage } from '../types'
 
 const usage = atom({ plugin: 'clausage', key: 'usage' } as const, null)
 const compacting = atom({ plugin: 'clausage', key: 'compacting' } as const, false)
+const stale = atom({ plugin: 'clausage', key: 'stale' } as const, false)
+
+const withContext = (current: Usage | null, context?: Bar): Usage | null =>
+  current && { ...current, context }
 
 const toBar = (limit?: SessionRateLimit): Bar | undefined =>
   limit && { percent: limit.percentUsed, resetsAt: limit.resetsAt }
@@ -33,17 +37,13 @@ const toUsage = ({ rateLimits, context }: Pick<SessionUsage, 'rateLimits' | 'con
   context: contextBar(context) ?? estimatedBar(context),
 })
 
-// Reads the usage once the compacted conversation stands, then brings the band back. A measured
-// fill still there predates the compaction (some builds keep it until the next response), so the
-// estimate comes first.
+// Fallback when the compaction reported no size: estimate once the compacted conversation stands.
+// A measured fill predates the compaction, so only the estimate counts; without one it stays empty.
 const settle = async ($: EngineInterface) => {
   try {
     const now = await $.session.usage({ breakdown: 'summary' })
-    const settled = {
-      ...toUsage(now),
-      context: estimatedBar(now.context) ?? contextBar(now.context),
-    }
-    await update($, usage, () => settled)
+    const estimate = estimatedBar(now.context)
+    await update($, usage, (current) => withContext(current, estimate))
   } finally {
     await update($, compacting, () => false)
   }
@@ -68,7 +68,31 @@ const resetLabel = (iso: string, now: number) => {
     : at.toLocaleDateString(undefined, { weekday: 'short' })
 }
 
-const tone = (percent: number) => (percent >= 80 ? 'error' : percent >= 50 ? 'warning' : 'success')
+type Tone = 'success' | 'warning' | 'error'
+
+const tone = (percent: number): Tone =>
+  percent >= 80 ? 'error' : percent >= 50 ? 'warning' : 'success'
+
+// The desktop draws an Svg as an image, out of reach of the theme's colors: fixed tones that read
+// on light and dark alike, and a translucent track.
+const PILL = { width: 48, height: 6 }
+const FILL: Record<Tone, string> = { success: '#3fb950', warning: '#d29922', error: '#f85149' }
+
+const pill = (percent?: number) => {
+  const { width, height } = PILL
+  const r = height / 2
+  const filled = percent === undefined ? 0 : (Math.min(Math.max(percent, 0), 100) / 100) * width
+  // Below the corner radius a rounded fill would bulge out of the track, so show at least a dot.
+  const w = filled > 0 ? Math.max(filled, height) : 0
+  const fill =
+    percent !== undefined && w > 0
+      ? `<rect width="${w.toFixed(1)}" height="${height}" rx="${r}" fill="${FILL[tone(percent)]}"/>`
+      : ''
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
+    `<rect width="${width}" height="${height}" rx="${r}" fill="#8b949e" fill-opacity="0.25"/>${fill}</svg>`
+  )
+}
 
 export const register: Register = (on) => {
   // Seed right away, so the band shows after a start or reload without waiting for a turn.
@@ -80,9 +104,14 @@ export const register: Register = (on) => {
     return next(e)
   })
 
+  // After a compaction or /clear the engine repeats the old fill with every other change (a rate
+  // limit, the cost), until a response moves it: keep ours until then, take the rest as measured.
   on('session.measure', async ($, e, next) => {
     const measured = toUsage(e)
-    await update($, usage, () => measured)
+    const moved = e.changed.includes('context')
+    if (moved) await update($, stale, () => false)
+    const keep = !moved && (await read($, stale))
+    await update($, usage, (current) => (keep ? withContext(measured, current?.context) : measured))
     return next(e)
   })
 
@@ -92,17 +121,36 @@ export const register: Register = (on) => {
   on('session.compact', async ($, e, next) => {
     if (e.trigger === 'precompute' || e.agentId !== undefined) return next(e)
 
+    // Drop the old fill at once: a placeholder beats a figure the compaction is about to undo.
+    const before = (await read($, usage))?.context
+    await update($, usage, (current) => withContext(current))
     await update($, compacting, () => true)
+
+    // A skipped or failed compaction leaves the conversation as it was, and its fill with it.
+    const restore = async () => {
+      await update($, usage, (current) => withContext(current, before))
+      await update($, compacting, () => false)
+    }
+
     try {
       const result = await next(e)
       if (result.skip !== undefined) {
-        await update($, compacting, () => false)
+        await restore()
         return result
       }
-      $.clock.after(0, () => void settle($))
+      // Until a response measures the new window, the engine still reports the old fill.
+      await update($, stale, () => true)
+      const { window } = (await $.session.usage()).context
+      if (result.tokensAfter !== undefined && window > 0) {
+        const after = { percent: (result.tokensAfter / window) * 100 }
+        await update($, usage, (current) => withContext(current, after))
+        await update($, compacting, () => false)
+      } else {
+        $.clock.after(0, () => void settle($))
+      }
       return result
     } catch (error) {
-      await update($, compacting, () => false)
+      await restore()
       throw error
     }
   })
@@ -110,7 +158,8 @@ export const register: Register = (on) => {
   // A /clear starts the conversation over, so the old context fill no longer applies.
   on('session.end', async ($, e, next) => {
     if (e.reason === 'clear') {
-      await update($, usage, (current) => current && { ...current, context: undefined })
+      await update($, usage, (current) => withContext(current))
+      await update($, stale, () => true)
     }
     return next(e)
   })
@@ -124,17 +173,34 @@ export const register: Register = (on) => {
     const { Box, Text } = $.ui.resolve(e)
     const now = await $.clock.now()
 
+    // The desktop gets a slim vector bar beside the figure; the terminal keeps its glyph meter.
+    const gauge = (label: string, bar?: Bar) => {
+      const figure = bar ? `${Math.round(bar.percent)}%` : '–'
+      if (e.surface === 'desktop') {
+        const { Svg } = $.ui.resolve(e)
+        return (
+          <>
+            <Svg source={pill(bar?.percent)} alt={`${label} ${figure}`} {...PILL} />
+            {bar ? <Text color={tone(bar.percent)}>{figure}</Text> : <Text dimColor>{figure}</Text>}
+          </>
+        )
+      }
+      return bar ? (
+        <Text color={tone(bar.percent)}>
+          {meter(bar.percent)} {figure}
+        </Text>
+      ) : (
+        <Text dimColor>
+          {meter(0)} {figure}
+        </Text>
+      )
+    }
+
     // A missing bar draws as an empty placeholder, so the band keeps its shape.
     const segment = (label: string, bar?: Bar) => (
-      <Box gap={1}>
+      <Box gap={1} alignItems="center">
         <Text dimColor>{label}</Text>
-        {bar ? (
-          <Text color={tone(bar.percent)}>
-            {meter(bar.percent)} {Math.round(bar.percent)}%
-          </Text>
-        ) : (
-          <Text dimColor>{meter(0)} –</Text>
-        )}
+        {gauge(label, bar)}
         {bar?.resetsAt && <Text dimColor>↻ {resetLabel(bar.resetsAt, now)}</Text>}
       </Box>
     )

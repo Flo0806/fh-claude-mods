@@ -9,6 +9,7 @@ export type Usage = {
 
 declare module 'claude-code' {
   interface PluginState {
-    clausage: { usage: Usage | null; compacting: boolean }
+    // stale: the engine's context figure predates a compaction or /clear until a response moves it.
+    clausage: { usage: Usage | null; compacting: boolean; stale: boolean }
   }
 }
